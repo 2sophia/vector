@@ -5,7 +5,7 @@ from fastapi import Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from utils.logger import get_logger
 from utils.config import settings
@@ -76,6 +76,9 @@ app = FastAPI(
         "name": "Sophia AI Cloud",
         "url": "https://www.sophia-cloud.com",
     },
+    # Docs servite via Scalar (vedi /docs), Swagger/ReDoc di default disattivati.
+    docs_url=None,
+    redoc_url=None,
 )
 
 app.add_middleware(
@@ -109,3 +112,35 @@ async def root():
 @app.get("/health", include_in_schema=False)
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/docs", include_in_schema=False)
+async def scalar_docs():
+    """API reference servita da Scalar (più leggibile di Swagger)."""
+    return HTMLResponse(f"""<!doctype html>
+<html>
+<head>
+    <title>Sophia Vector API — Reference</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ margin: 0; }}
+        :root {{
+            --scalar-color-accent: #6366f1;  /* indigo, brand Sophia Vector */
+            --scalar-radius: 6px;
+            --scalar-radius-lg: 8px;
+        }}
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    <script>
+        Scalar.createApiReference("#app", {{
+            "url": "/openapi.json",
+            "_integration": "fastapi",
+            "darkMode": true
+        }})
+    </script>
+</body>
+</html>""")

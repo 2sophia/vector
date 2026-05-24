@@ -34,14 +34,31 @@ def _get_model():
     try:
         from gliner import GLiNER
 
-        logger.info(f"Caricamento GLiNER '{GLINER_MODEL}' (one-time)…")
+        logger.info(f"Caricamento GLiNER '{GLINER_MODEL}' su CPU (one-time)…")
         _model = GLiNER.from_pretrained(GLINER_MODEL)
-        logger.info("GLiNER pronto")
+        # NER deterministica su CPU: la GPU resta a embeddings/parser.
+        try:
+            _model = _model.to("cpu")
+        except Exception:
+            pass
+        # Logga il device reale dei pesi: così nei log è inequivocabile.
+        try:
+            dev = next(_model.model.parameters()).device
+        except Exception:
+            dev = "cpu"
+        logger.info(f"✅ GLiNER pronto — device={dev} · model={GLINER_MODEL}")
         return _model
     except Exception as e:
         _model_failed = True
         logger.warning(f"GLiNER non disponibile, resto sulle sole regex: {e}")
         return None
+
+
+def warmup() -> None:
+    """Pre-carica GLiNER (best-effort) così device e stato finiscono nei log
+    all'avvio del worker, invece che al primo chunk processato."""
+    if GLINER_ENABLED:
+        _get_model()
 
 
 # --- Regex per entità strutturate (auto-identificanti, basso falso-positivo) ---

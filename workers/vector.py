@@ -24,7 +24,7 @@ from utils.docling import upload_file_for_chunking_sync
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
 from utils.falkor import write_document_graph, purge_file_graph
-from utils.entities import extract_entities_batch
+from utils.entities import extract_entities_batch, warmup as entities_warmup
 
 # ---------------------------------------------------------------------------
 # Config (centralizzata in utils/config, prefisso SOPHIA_VECTOR_)
@@ -299,6 +299,10 @@ async def main_loop():
         f"🧵 Vector worker started | "
         f"batch_size={INGEST_BATCH_SIZE} concurrent_jobs={MAX_CONCURRENT_JOBS} poll={POLL_INTERVAL}s"
     )
+
+    # Pre-carica GLiNER (se abilitato) fuori dall'event loop: il log del device
+    # (CPU) compare subito all'avvio del worker, e il primo job non paga il load.
+    await asyncio.to_thread(entities_warmup)
 
     while True:
         try:

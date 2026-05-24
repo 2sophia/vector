@@ -87,8 +87,12 @@ async def get_file(file_id: str):
 
 
 @router.get("/{file_id}/content")
-async def get_file_content(file_id: str):
-    """Download file content"""
+async def get_file_content(file_id: str, inline: bool = False):
+    """Restituisce il contenuto del file.
+
+    `inline=true` → Content-Disposition: inline, così il browser lo apre in scheda
+    (utile per PDF/immagini/HTML); altrimenti attachment (download).
+    """
     try:
         if not file_id.startswith("file-"):
             raise HTTPException(status_code=404, detail="File not found")
@@ -105,10 +109,11 @@ async def get_file_content(file_id: str):
             with open(file_path, mode="rb") as f:
                 yield from f
 
+        disposition = "inline" if inline else "attachment"
         return StreamingResponse(
             iterfile(),
             media_type=metadata.get("content_type", "application/octet-stream"),
-            headers={"Content-Disposition": f"attachment; filename={metadata['filename']}"},
+            headers={"Content-Disposition": f'{disposition}; filename="{metadata["filename"]}"'},
         )
 
     except HTTPException:

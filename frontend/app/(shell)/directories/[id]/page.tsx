@@ -7,17 +7,20 @@ import {
   ArrowLeft,
   CheckCircle2,
   CloudUpload,
+  ExternalLink,
   FileText,
   FileWarning,
   FolderTree,
   Loader2,
   Plug,
   RefreshCw,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { SourceBrowser, type BrowseFolder } from "@/components/source-browser";
@@ -83,6 +86,15 @@ const STATUS_RANK: Record<string, number> = {
 };
 type SortMode = "status" | "name" | "recent";
 const SORT_LABEL: Record<SortMode, string> = { status: "Stato", name: "Nome", recent: "Recenti" };
+
+// Filtro per stato (chip nella card file). "ALL" = nessun filtro.
+const STATUS_FILTERS: { key: string; label: string }[] = [
+  { key: "ALL", label: "Tutti" },
+  { key: "COMPLETED", label: "Completi" },
+  { key: "PROCESSING", label: "In corso" },
+  { key: "PENDING", label: "In coda" },
+  { key: "FAILED", label: "Falliti" },
+];
 
 function sortFiles(rows: StoreFile[], mode: SortMode): StoreFile[] {
   const arr = [...rows];
@@ -193,7 +205,16 @@ function FilesTable({
                 <div className="flex items-start gap-2">
                   <FileText className="mt-0.5 size-4 shrink-0 text-zinc-400" />
                   <div className="min-w-0">
-                    <div className="truncate font-medium">{f.filename}</div>
+                    <a
+                      href={`/api/backend/files/${f.file_id}/content?inline=1`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Apri il file"
+                      className="inline-flex max-w-full items-center gap-1 truncate font-medium hover:text-indigo-600 hover:underline dark:hover:text-indigo-400"
+                    >
+                      <span className="truncate">{f.filename}</span>
+                      <ExternalLink className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+                    </a>
                     <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-zinc-500 dark:text-zinc-400">
                       <span className="font-mono">{f.file_id}</span>
                       {f.usage_bytes ? <span>· {fmtBytes(f.usage_bytes)}</span> : null}
@@ -273,6 +294,8 @@ export default function DirectoryDetailPage() {
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("status");
+  const [fileQuery, setFileQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
 
   // Sources disponibili
   useEffect(() => {
@@ -481,10 +504,25 @@ export default function DirectoryDetailPage() {
   const propEntries = Object.entries(dir?.properties || {});
   const sourceLabel = (id?: string) => sources.find((s) => s.id === id)?.name || id || "—";
 
-  // Separa i file caricati a mano da quelli arrivati via sync (non mischiarli),
-  // poi ordina ciascun gruppo secondo la modalità scelta.
-  const manualFiles = sortFiles(files.filter((f) => !isSynced(f)), sortMode);
-  const syncedFiles = sortFiles(files.filter(isSynced), sortMode);
+  // Conteggi per stato (su tutti i file, per i badge del filtro).
+  const statusCounts = files.reduce<Record<string, number>>((acc, f) => {
+    acc[f.status] = (acc[f.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  // Applica ricerca per nome + filtro stato, poi separa manuali/sync e ordina.
+  const q = fileQuery.trim().toLowerCase();
+  const visibleFiles = files.filter(
+    (f) =>
+      (statusFilter === "ALL" || f.status === statusFilter) &&
+      (!q || f.filename.toLowerCase().includes(q)),
+  );
+  const manualFiles = sortFiles(visibleFiles.filter((f) => !isSynced(f)), sortMode);
+  const syncedFiles = sortFiles(visibleFiles.filter(isSynced), sortMode);
+  const filtering = statusFilter !== "ALL" || q.length > 0;
+  const totalManual = files.reduce((n, f) => n + (isSynced(f) ? 0 : 1), 0);
+  const totalSynced = files.length - totalManual;
+  const shownCount = manualFiles.length + syncedFiles.length;
   // Quanti file indicizzati appartengono a una specifica sync.
   const syncedCount = (jobId: string) =>
     files.filter((f) => f.sharepoint_job_id === jobId).length;
@@ -816,7 +854,9 @@ export default function DirectoryDetailPage() {
                 <CardDescription>
                   {files.length === 0
                     ? "Nessun file."
-                    : `${files.length} file · ${manualFiles.length} caricati a mano · ${syncedFiles.length} da sync`}
+                    : filtering
+                      ? `${shownCount} di ${files.length} mostrati`
+                      : `${files.length} file · ${totalManual} caricati a mano · ${totalSynced} da sync`}
                 </CardDescription>
               </div>
               {files.length > 0 && (
@@ -838,11 +878,52 @@ export default function DirectoryDetailPage() {
                 </div>
               )}
             </div>
+
+            {files.length > 0 && (
+              <div className="flex flex-col gap-2 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                {/* ricerca per nome file */}
+                <div className="relative w-full sm:max-w-xs">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400" />
+                  <Input
+                    value={fileQuery}
+                    onChange={(e) => setFileQuery(e.target.value)}
+                    placeholder="Cerca per nome…"
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+                {/* filtro per stato (solo gli stati presenti) */}
+                <div className="flex flex-wrap items-center gap-1">
+                  {STATUS_FILTERS.filter(
+                    (s) => s.key === "ALL" || (statusCounts[s.key] ?? 0) > 0,
+                  ).map((s) => {
+                    const n = s.key === "ALL" ? files.length : statusCounts[s.key] ?? 0;
+                    return (
+                      <button
+                        key={s.key}
+                        onClick={() => setStatusFilter(s.key)}
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                          statusFilter === s.key
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700",
+                        )}
+                      >
+                        {s.label} <span className="opacity-60">{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
             {files.length === 0 ? (
               <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
                 Carica il primo file.
+              </div>
+            ) : shownCount === 0 ? (
+              <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
+                Nessun file corrisponde alla ricerca o al filtro.
               </div>
             ) : (
               <>
