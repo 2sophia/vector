@@ -1,0 +1,59 @@
+"""Application settings.
+
+Shim retrocompatibile: i valori vengono dalla config centralizzata
+(`utils/config.py`, pydantic BaseSettings con prefisso SOPHIA_VECTOR_).
+Questo modulo mantiene i nomi delle costanti storiche così il codice che
+fa `from utils.settings import QDRANT_URL` non cambia.
+"""
+
+from utils.config import settings
+
+# Qdrant & servizi
+QDRANT_URL = settings.QDRANT_URL
+DOCLING_URL = settings.DOCLING_URL
+MONGODB_DB_URI = settings.MONGODB_URI
+BGE_M3_URL = settings.EMBEDDINGS_URL
+
+# FalkorDB (knowledge graph)
+GRAPH_ENABLED = settings.GRAPH_ENABLED
+FALKOR_HOST = settings.FALKOR_HOST
+FALKOR_PORT = settings.FALKOR_PORT
+FALKOR_PASSWORD = settings.FALKOR_PASSWORD
+FALKOR_GRAPH_PREFIX = settings.FALKOR_GRAPH_PREFIX
+
+# Entity extraction (GLiNER + regex)
+GLINER_ENABLED = settings.GLINER_ENABLED
+GLINER_MODEL = settings.GLINER_MODEL
+GLINER_THRESHOLD = settings.GLINER_THRESHOLD
+GLINER_LABELS = [s.strip() for s in settings.GLINER_LABELS.split(",") if s.strip()]
+
+# Storage
+FILES_STORAGE = settings.FILES_STORAGE
+DOCUMENTS_STORAGE = settings.DOCUMENTS_STORAGE
+MAX_FILE_SIZE = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+
+# Chunking
+DEFAULT_CHUNK_SIZE = settings.DEFAULT_CHUNK_SIZE
+DEFAULT_CHUNK_OVERLAP = settings.DEFAULT_CHUNK_OVERLAP
+DEFAULT_EMBEDDING_DIMENSION = settings.DEFAULT_EMBEDDING_DIMENSION
+DEFAULT_POINTS_BATCH_SIZE = settings.DEFAULT_POINTS_BATCH_SIZE
+
+# Parser Docling (tuning)
+PARSER_MODEL_TOKENIZER = settings.PARSER_MODEL_TOKENIZER
+PARSER_MODEL_MAX_TOKENS = settings.PARSER_MODEL_MAX_TOKENS
+PARSER_USE_OCR = settings.PARSER_USE_OCR
+PARSER_PICTURE_DESCRIPTION = settings.PARSER_PICTURE_DESCRIPTION
+PARSER_TABLE_MODE = settings.PARSER_TABLE_MODE.lower()
+PARSER_TABLE_CELL_MATCHING = settings.PARSER_TABLE_CELL_MATCHING
+PARSER_PDF_BACKEND = settings.PARSER_PDF_BACKEND.lower()
+PARSER_MAX_WAIT_SECONDS = settings.PARSER_MAX_WAIT_SECONDS
+
+# Ingestion worker (tuning)
+INGEST_BATCH_SIZE = settings.INGEST_BATCH_SIZE
+INGEST_MAX_CONCURRENT_JOBS = settings.INGEST_MAX_CONCURRENT_JOBS
+INGEST_WAIT_TIME_JOBS = settings.INGEST_WAIT_TIME_JOBS
+SHAREPOINT_POLL_INTERVAL = settings.SHAREPOINT_POLL_INTERVAL
+
+# Scheduler (cron interno)
+INTERNAL_API_URL = settings.INTERNAL_API_URL
+SCHEDULER_POLL_INTERVAL = settings.SCHEDULER_POLL_INTERVAL

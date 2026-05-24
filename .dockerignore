@@ -1,0 +1,82 @@
+# install script
+*.sh
+!docker-entrypoint.sh
+
+.data
+.claude
+.env.bak-20260524
+.env.example
+CLAUDE.md
+compile-and-publish.sh
+dev-start.sh
+DEVELOPERS.md
+docker-compose.yml
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtualenv / poetry / pipenv
+.venv/
+venv/
+.env/
+.env.*
+
+# =========================
+# Git / VCS
+# =========================
+.git/
+.gitignore
+.gitattributes
+
+# =========================
+# Editor / OS
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =========================
+# Test / tooling
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# Runtime / local storage
+# =========================
+storage/
+storage/**
+!storage/.gitkeep
+
+# =========================
+# Docs / misc
+# =========================
+README.md
+*.md
+docs/
+test/
+examples/
+
+# =========================
+# Docker
+# =========================
+Dockerfile

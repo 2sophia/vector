@@ -1,0 +1,14 @@
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="logoGradient" cx="0.3" cy="0.3" r="0.8">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#9333EA"/>
+    </radialGradient>
+  </defs>
+  
+  <!-- Cerchio esterno con gradiente -->
+  <circle cx="24" cy="24" r="24" fill="url(#logoGradient)"/>
+  
+  <!-- Cerchio interno bianco -->
+  <circle cx="24" cy="24" r="12" fill="white" opacity="0.9"/>
+</svg>

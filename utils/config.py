@@ -1,0 +1,116 @@
+"""
+Sophia Vector — Core configuration.
+
+Tutte le env applicative hanno prefisso SOPHIA_VECTOR_ (es.
+SOPHIA_VECTOR_QDRANT_URL). I default puntano a localhost per lo sviluppo;
+in produzione il docker-compose passa le env esplicite.
+
+`utils/settings.py` espone le costanti derivate da qui, così il codice
+esistente che fa `from utils.settings import QDRANT_URL` continua a funzionare.
+"""
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # --- App ---
+    APP_NAME: str = "Sophia Vector"
+    APP_VERSION: str = "0.1.0-alpha"
+    DEBUG: bool = False
+
+    # --- Auth / sicurezza ---
+    # API_KEY: se valorizzata, gli endpoint /v1/* richiedono Authorization: Bearer.
+    # CORS_ORIGINS: csv di origin permesse; vuoto = "*".
+    # SECRET_KEY: master key per cifrare i secret delle ingestion sources.
+    API_KEY: str = ""
+    CORS_ORIGINS: str = ""
+    SECRET_KEY: str = ""
+
+    # --- MongoDB (URI completo con nome db) ---
+    # Dev/default: sophia_vector. In prod il db storico si chiama "sophia":
+    # al deploy o si migra o si punta l'URI al nome esistente.
+    MONGODB_URI: str = "mongodb://localhost:27017/sophia_vector"
+
+    # --- Qdrant ---
+    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: str = ""
+
+    # --- Docling (parser) ---
+    DOCLING_URL: str = "http://localhost:5001"
+
+    # --- Embeddings + rerank (BGE-M3 service, espone /v1/embeddings e /v1/rerank) ---
+    EMBEDDINGS_URL: str = "http://localhost:8004"
+
+    # --- FalkorDB (knowledge graph; layer ADDITIVO sopra Qdrant) ---
+    # GRAPH_ENABLED=False disattiva del tutto la scrittura grafo (la pipeline
+    # Qdrant resta identica). La scrittura è comunque best-effort: se FalkorDB
+    # è giù, l'ingestion non fallisce. In prod overridare FALKOR_PASSWORD.
+    GRAPH_ENABLED: bool = True
+    FALKOR_HOST: str = "localhost"
+    FALKOR_PORT: int = 6379
+    FALKOR_PASSWORD: str = "falkordb"
+    # Prefisso namespace per i nomi grafo. Una sola istanza FalkorDB può ospitare
+    # più progetti: ogni grafo è una chiave Redis separata. Settando un prefisso
+    # diverso per progetto (es. "sv:") si evitano collisioni di nomi. Vuoto = il
+    # nome grafo è esattamente il vector_store_id.
+    FALKOR_GRAPH_PREFIX: str = ""
+
+    # --- Entity extraction (M3 grafo: GLiNER zero-shot + regex, niente LLM) ---
+    # GLINER_ENABLED=False → solo regex (IBAN/CF/P.IVA). Le label sono CSV e
+    # vengono passate a GLiNER a runtime (zero-shot, dominio bancario IT).
+    GLINER_ENABLED: bool = True
+    GLINER_MODEL: str = "urchade/gliner_multi-v2.1"
+    GLINER_THRESHOLD: float = 0.5
+    GLINER_LABELS: str = "organizzazione,persona,normativa,data,importo monetario,luogo,prodotto finanziario"
+
+    # --- Storage su disco ---
+    FILES_STORAGE: str = "/app/storage/files"
+    DOCUMENTS_STORAGE: str = "/app/storage/documents"
+    MAX_FILE_SIZE_MB: int = 512
+
+    # --- Chunking / indexing defaults ---
+    DEFAULT_CHUNK_SIZE: int = 1024
+    DEFAULT_CHUNK_OVERLAP: int = 128
+    DEFAULT_EMBEDDING_DIMENSION: int = 1024
+    DEFAULT_POINTS_BATCH_SIZE: int = 64
+
+    # --- Parser Docling (tuning; ex env legacy os.getenv senza prefisso) ---
+    PARSER_MODEL_TOKENIZER: str = "BAAI/bge-m3"
+    # Chunk più piccoli = retrieval più preciso; il contesto perso viene
+    # recuperato a query time dal grafo (:NEXT). Vedi M4 graph-augmented retrieval.
+    PARSER_MODEL_MAX_TOKENS: int = 512
+    PARSER_USE_OCR: bool = False
+    PARSER_PICTURE_DESCRIPTION: bool = False
+    # "fast" e non "accurate": su tabelle a celle larghe (es. circolari
+    # "categoria | descrizione") TableFormer accurate inventa griglie con
+    # spanning patologico (es. 318x12 per una tabella a 2 colonne) e il
+    # serializer le espande → 30KB di testo diventano 3MB di markdown / ~9.7M
+    # token, e il chunking esplode (ReadTimeout in prod). "fast" rileva la
+    # struttura senza l'esplosione; i triplets restano. Vedi issue docling #3428.
+    PARSER_TABLE_MODE: str = "fast"
+    PARSER_TABLE_CELL_MATCHING: bool = False
+    PARSER_PDF_BACKEND: str = "docling_parse"
+    # Timeout per-documento inviato a Docling. Default alto (prod); le istanze
+    # Docling con un massimo più basso (es. dev = 1800s) vanno sotto quel tetto.
+    PARSER_MAX_WAIT_SECONDS: int = 36000
+
+    # --- Ingestion worker (tuning; ex env legacy os.getenv senza prefisso) ---
+    INGEST_BATCH_SIZE: int = 64
+    INGEST_MAX_CONCURRENT_JOBS: int = 1
+    INGEST_WAIT_TIME_JOBS: float = 3.0
+    SHAREPOINT_POLL_INTERVAL: float = 5.0
+
+    # --- Scheduler (cron interno per le sync; sostituisce il cron di sistema) ---
+    # Lo scheduler worker chiama l'endpoint di sync via HTTP (riusa l'overlap guard
+    # in-app). In dev il backend è :8100, in prod :8003 → override in prod.
+    INTERNAL_API_URL: str = "http://127.0.0.1:8100"
+    SCHEDULER_POLL_INTERVAL: float = 30.0
+
+    model_config = {
+        "env_prefix": "SOPHIA_VECTOR_",
+        "env_file": ".env",
+        "extra": "ignore",
+    }
+
+
+settings = Settings()

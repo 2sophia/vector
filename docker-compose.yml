@@ -1,0 +1,124 @@
+services:
+
+#  # ==========================================================================
+#  # Sophia Vector — FastAPI backend + Next.js frontend (single image)
+#  # ==========================================================================
+#  sophia-vector:
+#    image: sophiacloud/vector:0.1.0-alpha
+#    container_name: sophia-vector
+#    pull_policy: always
+#    command: ["--frontend"]
+#    restart: unless-stopped
+#    ports:
+#      - "8100:8100"             # backend
+#      - "3100:3100"             # frontend
+#    environment:
+#      NEXTAUTH_URL: "https://rgci-b.vivibanca.it"
+#      SOPHIA_VECTOR_SECRET_KEY: "<vedi .env.prod — NON committare segreti reali>"
+#      NEXTAUTH_SECRET: "<vedi .env.prod — NON committare segreti reali>"
+#    volumes:
+#      - sophia_vector_data:/app/storage
+
+  # MongoDB: in DEV gira come binario nell'OS (non container).
+
+  # ==========================================================================
+  # IBM Docling Parser
+  # ==========================================================================
+  parser:
+    image: ghcr.io/docling-project/docling-serve-cu130:v1.19.0
+    container_name: parser
+    mem_limit: 32g
+    ports:
+      - "127.0.0.1:5001:5001"
+      - "127.0.0.1:8080:8080"
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      DOCLING_SERVE_ARTIFACTS_PATH: ""
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: "1"
+      DOCLING_SERVE_ENG_KIND: "local"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_ENG_LOC_SHARE_MODELS: "true"
+      DOCLING_SERVE_ENABLE_MANAGEMENT_ENDPOINTS: "true"
+      DOCLING_SERVE_SINGLE_USE_RESULTS: "true"
+      DOCLING_SERVE_RESULT_REMOVAL_DELAY: "60"
+      DOCLING_SERVE_MAX_NUM_PAGES: "5000"
+      DOCLING_SERVE_MAX_FILE_SIZE: "104857600"
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: "1800"
+      DOCLING_SERVE_MAX_SYNC_WAIT: "36000"
+      DOCLING_NUM_THREADS: "4"
+      DOCLING_PERF_PAGE_BATCH_SIZE: "4"
+      DOCLING_SERVE_QUEUE_MAX_SIZE: "16"
+      DOCLING_SERVE_LOG_LEVEL: "INFO"
+    restart: unless-stopped
+    volumes:
+      - docling_data:/app/data
+      - huggingface-cache:/root/.cache/huggingface
+      - docling_models:/opt/app-root/src/.cache/docling
+
+  # ==========================================================================
+  # BAAI/bge-m3 service (espone /v1/embeddings e /v1/rerank)
+  # ==========================================================================
+  embeddings:
+    image: sophiacloud/bge-m3-service:cuda
+    container_name: embeddings
+    mem_limit: 4g
+    environment:
+      BGE_MODEL_MEMORY: ${BGE_MODEL_MEMORY:-0.20}
+      BGE_DEVICE: ${BGE_MODEL_DEVICE:-cuda}
+      M3_MODEL_ID: BAAI/bge-m3
+      NVIDIA_VISIBLE_DEVICES: "all"
+      M3_RERANK_WEIGHTS: "0.35,0.35,0.30"
+    ports:
+      - "8004:8004"
+    runtime: nvidia
+    restart: unless-stopped
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+
+  # ==========================================================================
+  # Qdrant Vector DB
+  # ==========================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.18
+    container_name: qdrant
+    mem_limit: 4g
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # ==========================================================================
+  # FalkorDB Knowledge Graph
+  # ==========================================================================
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: falkordb
+    mem_limit: 4g
+    ports:
+      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:3000"
+    environment:
+      - REDIS_ARGS=--requirepass falkordb
+      - ENCRYPTION_KEY=una-chiave-lunga-e-stabile-32+char
+    restart: unless-stopped
+    volumes:
+      - falkordb_data:/data
+
+
+volumes:
+  qdrant_data:
+    driver: local
+  docling_data:
+    driver: local
+  docling_models:
+    driver: local
+  huggingface-cache:
+    driver: local
+  falkordb_data:
+    driver: local
+  sophia_vector_data:
+    driver: local

@@ -1,0 +1,22 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+cryptography
+httpx
+aiofiles
+qdrant-client
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+python-slugify
+requests
+pymongo
+falkordb
+croniter
+# entity extraction (M3 knowledge graph). Per CPU-only installare torch da:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch
+gliner
+python-dotenv
+rich
