@@ -1,7 +1,7 @@
 # Sophia Vector
 
 <p align="center">
-  <img src="docs/hero.png" alt="Sophia Vector — vector + graph, un retrieval solo" width="100%">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/hero.png" alt="Sophia Vector — vector + graph, un retrieval solo" width="100%">
 </p>
 
 OpenAI SDK Compatible Vector Store with Qdrant backend, a FalkorDB **knowledge graph**,
