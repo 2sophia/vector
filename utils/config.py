@@ -62,6 +62,35 @@ class Settings(BaseSettings):
     GLINER_MODEL: str = "urchade/gliner_multi-v2.1"
     GLINER_THRESHOLD: float = 0.5
     GLINER_LABELS: str = "organizzazione,persona,normativa,data,importo monetario,luogo,prodotto finanziario"
+    # Device del modello GLiNER: "cpu" | "cuda" | "cuda:N" | "auto" (GPU se c'è,
+    # altrimenti CPU). Default CPU: il worker gira spesso sullo stesso host dove la
+    # GPU è già presa da vLLM/embeddings/parser, e GLiNER è piccolo (~50ms/chunk su
+    # CPU). Su un host con GPU libera il dev fa opt-in con "cuda". Se CUDA non è
+    # disponibile il caricamento ricade su CPU (best-effort, non rompe l'ingestion).
+    GLINER_DEVICE: str = "cpu"
+
+    # --- Relation extraction (M5 grafo: GLiNER-relex, archi TIPIZZATI) ---
+    # Layer ADDITIVO sopra le entità: oltre a "compaiono insieme", estrae relazioni
+    # tipizzate zero-shot (es. "Decreto —ai sensi di→ D.lgs. 231/2001", "Doc —pubblicato
+    # da→ Org") in una passata joint NER+RE. Stesso filone di GLiNER (stessa lib, multi-
+    # lingue per l'IT), pattern lazy/device identico (riusa GLINER_DEVICE). Default OFF:
+    # è un 2° modello in RAM + ~0.2s/chunk → opt-in. Le label di relazione sono CSV,
+    # zero-shot, da tarare sul dominio. Best-effort: un guasto qui non rompe l'ingestion.
+    RELATIONS_ENABLED: bool = False
+    RELATIONS_MODEL: str = "knowledgator/gliner-relex-multi-v1.0"
+    RELATIONS_ENTITY_THRESHOLD: float = 0.5
+    RELATIONS_THRESHOLD: float = 0.45
+    RELATIONS_ADJACENCY_THRESHOLD: float = 0.55
+    # Default snello: solo relazioni SPECIFICHE ad alto valore. Le generiche
+    # ("si applica a", "riguarda") sono state tolte dal default perché dominavano il
+    # volume con poco segnale — chi le vuole le aggiunge via schema (globale o
+    # per-vector-store). Restano comunque agnostiche: sono solo stringhe zero-shot.
+    RELATIONS_LABELS: str = "pubblicato da,pubblicato il,emesso da,ai sensi di,modifica,sostituisce,fa riferimento a"
+    # Filtri di igiene del segnale (agnostici, non dominio-specifici): scarta gli
+    # estremi troppo lunghi (frasi, non entità) e le relazioni tra due entità
+    # entrambe non tipizzate ("other"→"other", tipico rumore da tabelle/figure).
+    RELATIONS_MAX_ENTITY_WORDS: int = 8
+    RELATIONS_DROP_OTHER_TO_OTHER: bool = True
 
     # --- Storage su disco ---
     FILES_STORAGE: str = "/app/storage/files"
@@ -108,9 +137,35 @@ class Settings(BaseSettings):
     ASR_ENABLED: bool = True
     ASR_MODEL: str = "small"
     ASR_LANGUAGE: str = "it"
+    # Device Whisper: "cpu" | "cuda" | "cuda:N" | "auto". Stessa logica di GLINER_DEVICE
+    # (default CPU, opt-in GPU). faster-whisper/CTranslate2 fa la sua detection con
+    # "auto". COMPUTE_TYPE "int8" va bene su entrambi; su GPU si può alzare a
+    # "float16"/"int8_float16" per più qualità.
+    ASR_DEVICE: str = "cpu"
     ASR_COMPUTE_TYPE: str = "int8"
     ASR_MAX_AUDIO_MINUTES: int = 60
     ASR_MAX_VIDEO_MINUTES: int = 30
+
+    # --- Data curation (dedup del CONTENUTO, non dei dati) ---
+    # Tesi: ingerire MEGLIO, non di più. Docling contestualizza il testo del chunk
+    # con un prefisso heading "inbody" (titolo-doc › sezione): lo stesso disclaimer
+    # sotto sezioni/documenti diversi ha quindi un `text` diverso. Il dedup vero è
+    # sul BODY (testo senza il prefisso heading), che ricostruiamo da `headings`.
+    # Per ogni collection teniamo `body_hash → in quanti documenti compare`:
+    #   CURATION_ENABLED          → master switch del layer (off = pipeline invariata).
+    #   CURATION_GRAPH_LINK       → collega nel grafo i chunk con stesso body
+    #                               (:Chunk)-[:SAME_CONTENT]->(:Content {hash, doc_count}):
+    #                               la molteplicità diventa segnale (provenienza +
+    #                               "boilerplate in N doc") invece di essere buttata.
+    #   CURATION_BOILERPLATE_*    → a search-time un chunk il cui body compare in oltre
+    #                               RATIO dei documenti della collection (e in almeno
+    #                               MIN_DOCS) è boilerplate → escluso/deprioritizzato.
+    #                               Migliora le risposte: disclaimer/intestazioni
+    #                               ripetute smettono di saturare i top-K.
+    CURATION_ENABLED: bool = True
+    CURATION_GRAPH_LINK: bool = True
+    CURATION_BOILERPLATE_RATIO: float = 0.5
+    CURATION_BOILERPLATE_MIN_DOCS: int = 5
 
     # --- Ingestion worker (tuning; ex env legacy os.getenv senza prefisso) ---
     INGEST_BATCH_SIZE: int = 64

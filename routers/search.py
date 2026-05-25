@@ -1,6 +1,7 @@
 """Search endpoints"""
 
 import os
+import re
 
 import traceback
 
@@ -12,13 +13,20 @@ from utils import (
     qdrant_client,
 )
 
-from utils.qdrant import qdrant_hybrid_batch_search
+from utils.qdrant import qdrant_hybrid_batch_search, qdrant_lexical_search
 from utils.embeddings import get_bge_reranking_docs
 from utils.falkor import expand_neighbors
+from utils.fusion import rrf_fuse
 
 from utils.schemas import VectorSearch, SearchResponse
 
-from utils.settings import FILES_STORAGE
+from utils.settings import (
+    FILES_STORAGE,
+    CURATION_ENABLED,
+    CURATION_BOILERPLATE_RATIO,
+    CURATION_BOILERPLATE_MIN_DOCS,
+)
+from utils.curation import body_hash, boilerplate_hashes
 
 logger = get_logger(__name__)
 
@@ -69,85 +77,159 @@ def normalize_point(point):
     }
 
 
-def _graph_augment(vector_store_id, query_text, direct, search_data):
-    """M4 — graph-augmented retrieval.
+# token "esatti" dove il dense embedding è debole: frasi tra virgolette, riferimenti
+# numerici (231/2001, 2026-001), codici alfanumerici (D.lgs, IT60X...), acronimi.
+_QUOTED_RE = re.compile(r'"([^"]{2,})"')
+_NUMREF_RE = re.compile(r'\b\d+(?:[/.\-]\d+)+\b')
+_ALNUM_RE = re.compile(r'\b(?=\w*\d)(?=\w*[A-Za-z])[\w.]{2,}\b')
+_ACRONYM_RE = re.compile(r'\b[A-Z]{3,}\b')
 
-    Dai chunk diretti di Qdrant espande il vicinato nel grafo (entità condivise +
-    :NEXT, filtrato per slug), unisce, e ri-rerankizza TUTTO con BGE-M3 → top-N.
-    Se non c'è nulla da espandere o qualcosa va storto, ritorna i diretti invariati.
+
+def _extract_lexical_terms(query_text):
+    """Estrae dalla query i termini ESATTI su cui il dense è debole (codici,
+    riferimenti, acronimi, frasi tra virgolette). Vuoto se non ce ne sono → il canale
+    lessicale viene saltato (zero costo sulle query in linguaggio naturale)."""
+    terms = set()
+    for m in _QUOTED_RE.findall(query_text):
+        terms.add(m.strip())
+    for rx in (_NUMREF_RE, _ALNUM_RE, _ACRONYM_RE):
+        terms.update(rx.findall(query_text))
+    return [t for t in terms if len(t) >= 3]
+
+
+def _augment(vector_store_id, query_text, direct, search_data):
+    """Retrieval multi-canale fuso con RRF + un solo rerank finale.
+
+    Canali: **vettoriale** (Qdrant, sempre — dense+sparse già fusi a monte), **grafo**
+    (se `graph_expand`: entità condivise + :NEXT), **lessicale/exact-match** (se la
+    query ha codici/riferimenti: recupera chunk che li contengono, dove il dense
+    fallisce). RRF fonde i ranghi dei canali → pool di candidati; il cross-encoder fa
+    il ranking finale. Se non c'è alcun canale extra ritorna i diretti invariati.
     """
-    seeds = [d["id"] for d in direct if d.get("id")][:10]
-    if not seeds:
-        return direct
-    # slug presenti nei risultati → l'espansione resta nella stessa directory
-    slugs = sorted({
-        (d.get("payload") or {}).get("sophia_directory_slug")
-        for d in direct
-        if (d.get("payload") or {}).get("sophia_directory_slug")
-    })
+    cand_by_id = {d["id"]: d for d in direct if d.get("id")}
+    channels = [[d["id"] for d in direct if d.get("id")]]
 
-    neighbors = expand_neighbors(
-        vector_store_id, seeds,
-        slugs=slugs or None,
-        limit=search_data.graph_neighbors or 20,
-        df_max=search_data.graph_df_max or 0.5,
-    )
-    if not neighbors:
-        return direct
-
-    # candidati = diretti (Qdrant) + vicini (grafo), dedup per point_id
-    candidates = list(direct)
-    seen = {d["id"] for d in direct}
-    for nb in neighbors:
-        pid = nb.get("qdrant_point_id")
-        if not pid or pid in seen:
-            continue
-        seen.add(pid)
-        candidates.append({
-            "id": pid,
-            "score": None,
-            "score_qdrant": None,
-            "filename": nb.get("filename"),
-            "file_id": nb.get("file_id"),
-            "payload": {
-                "text": nb.get("text"),
-                "filename": nb.get("filename"),
-                "file_id": nb.get("file_id"),
-                "sophia_directory_slug": nb.get("slug"),
-            },
-            "source": nb.get("source"),
-            "via": nb.get("via"),
+    # --- canale grafo (opzionale) ---
+    if getattr(search_data, "graph_expand", False) and direct:
+        seeds = [d["id"] for d in direct if d.get("id")][:10]
+        slugs = sorted({
+            (d.get("payload") or {}).get("sophia_directory_slug")
+            for d in direct if (d.get("payload") or {}).get("sophia_directory_slug")
         })
+        neighbors = expand_neighbors(
+            vector_store_id, seeds, slugs=slugs or None,
+            limit=search_data.graph_neighbors or 20,
+            df_max=search_data.graph_df_max or 0.5,
+        )
+        glist = []
+        for nb in neighbors:
+            pid = nb.get("qdrant_point_id")
+            if not pid:
+                continue
+            glist.append(pid)
+            cand_by_id.setdefault(pid, {
+                "id": pid, "score": None, "score_qdrant": None,
+                "filename": nb.get("filename"), "file_id": nb.get("file_id"),
+                "payload": {
+                    "text": nb.get("text"), "filename": nb.get("filename"),
+                    "file_id": nb.get("file_id"), "sophia_directory_slug": nb.get("slug"),
+                },
+                "source": nb.get("source"), "via": nb.get("via"),
+            })
+        if glist:
+            channels.append(glist)
 
-    # dedup per contenuto: lo stesso chunk può arrivare da più directory/path
-    deduped, seen_text = [], set()
-    for c in candidates:
+    # --- canale lessicale / exact-match (opzionale, se ci sono termini esatti) ---
+    terms = _extract_lexical_terms(query_text)
+    if terms:
+        try:
+            lex = qdrant_lexical_search(vector_store_id, terms, search_data, limit=30)
+        except Exception as e:
+            logger.warning(f"[lexical] fetch fallito: {e}")
+            lex = []
+        llist = []
+        for pt in lex:
+            pid = str(pt.id)
+            llist.append(pid)
+            payload = pt.payload or {}
+            cand_by_id.setdefault(pid, {
+                "id": pid, "score": None, "score_qdrant": None,
+                "filename": payload.get("filename"), "file_id": payload.get("file_id"),
+                "payload": payload, "source": "lexical",
+            })
+        if llist:
+            channels.append(llist)
+            logger.info(f"[lexical] termini={terms} → {len(llist)} chunk exact-match")
+
+    # nessun canale extra oltre al vettoriale → niente da fondere
+    if len(channels) <= 1:
+        return direct
+
+    # RRF: fonde i ranghi dei canali (accordo tra canali premiato)
+    fused_score = dict(rrf_fuse(channels))
+
+    # pool candidati in ordine RRF, dedup per contenuto
+    candidates, seen_text = [], set()
+    for cid, _s in sorted(fused_score.items(), key=lambda kv: kv[1], reverse=True):
+        c = cand_by_id.get(cid)
+        if not c:
+            continue
         key = ((c.get("payload") or {}).get("text") or "")[:200]
         if key and key in seen_text:
             continue
         seen_text.add(key)
-        deduped.append(c)
-    candidates = deduped
+        candidates.append(c)
 
-    # rerank unificato vs query. Il servizio BGE è un cross-encoder: scora
-    # direttamente la coppia query↔documento, i vecchi `weights` dense/sparse/
-    # colbert sono ignorati → non li passiamo.
+    top_n = search_data.max_num_results or 15
+
+    # rerank unico sul pool fuso (cross-encoder query↔doc); fallback su ordine RRF
     docs = [(c.get("payload") or {}).get("text") or "" for c in candidates]
     try:
         reranked = get_bge_reranking_docs(query_text, docs)
     except Exception as e:
-        logger.warning(f"[M4] rerank set espanso fallito: {e}")
-        return direct
+        logger.warning(f"[augment] rerank fallito, fallback RRF: {e}")
+        rows = []
+        for c in candidates[:top_n]:
+            c["score"] = fused_score.get(c["id"])
+            rows.append(c)
+        return rows
 
     order = sorted(reranked, key=lambda r: r.get("relevance_score", 0.0), reverse=True)
-    top_n = search_data.max_num_results or 15
     rows = []
     for r in order[:top_n]:
         c = candidates[r["index"]]
         c["score"] = r.get("relevance_score")
         rows.append(c)
-    logger.info(f"[M4] {len(direct)} diretti + {len(neighbors)} vicini → top {len(rows)} dopo rerank")
+    logger.info(f"[augment] {len(channels)} canali → {len(candidates)} candidati → top {len(rows)}")
     return rows
+
+
+def _suppress_boilerplate(vector_store_id, rows):
+    """Data curation a search-time: toglie dai risultati i chunk il cui BODY
+    (testo senza il prefisso heading) compare in oltre RATIO dei documenti della
+    collection (e in almeno MIN_DOCS) — disclaimer, intestazioni e firme ripetute
+    non devono saturare i top-K passati all'LLM. È la tesi "meno dati puliti =
+    output migliore" applicata dove conta. No-op se il layer è disattivo. Failsafe:
+    se togliere svuoterebbe del tutto i risultati, li lascia (meglio rumore che vuoto).
+    """
+    if not CURATION_ENABLED or not rows:
+        return rows
+    row_hashes = [
+        body_hash((r.get("payload") or {}).get("text") or "",
+                  (r.get("payload") or {}).get("headings"))
+        for r in rows
+    ]
+    bp = boilerplate_hashes(
+        vector_store_id, row_hashes,
+        CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS,
+    )
+    if not bp:
+        return rows
+    kept = [r for r, h in zip(rows, row_hashes) if h not in bp]
+    removed = len(rows) - len(kept)
+    if removed:
+        logger.info(f"[curation] soppressi {removed} chunk boilerplate ({vector_store_id})")
+    return kept or rows
 
 
 # ================== VECTOR SEARCH ENDPOINT ==================
@@ -198,9 +280,14 @@ def search_vector_store(vector_store_id: str, search_data: VectorSearch):
         for r in result_rows:
             r["source"] = "qdrant"
 
-        # ========== M4: graph-augmented retrieval (opzionale, dietro flag) ==========
-        if getattr(search_data, "graph_expand", False):
-            result_rows = _graph_augment(vector_store_id, query_text, result_rows, search_data)
+        # ========== Retrieval multi-canale fuso con RRF ==========
+        # _augment decide quali canali aggiungere: grafo (se graph_expand) e
+        # lessicale/exact-match (se la query ha codici/riferimenti). No-op se non c'è
+        # alcun canale extra → query in linguaggio naturale senza grafo restano com'erano.
+        result_rows = _augment(vector_store_id, query_text, result_rows, search_data)
+
+        # ========== Data curation: sopprimi il boilerplate dai risultati ==========
+        result_rows = _suppress_boilerplate(vector_store_id, result_rows)
 
         # ========== STEP 9: BUILD RESPONSE ==========
         search_results = []

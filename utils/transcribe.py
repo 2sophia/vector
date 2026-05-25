@@ -20,6 +20,7 @@ from utils.settings import (
     ASR_ENABLED,
     ASR_MODEL,
     ASR_LANGUAGE,
+    ASR_DEVICE,
     ASR_COMPUTE_TYPE,
 )
 
@@ -31,13 +32,25 @@ _model = None
 
 
 def _get_model():
-    """Carica (una volta) il modello Whisper. Lazy: solo al primo uso."""
+    """Carica (una volta) il modello Whisper sul device scelto. Lazy: solo al primo
+    uso. Device da ASR_DEVICE ("cpu" | "cuda" | "cuda:N" | "auto"); faster-whisper
+    fa la sua detection CUDA con "auto" (via CTranslate2, indipendente da torch)."""
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        logger.info(f"Caricamento Whisper '{ASR_MODEL}' su CPU (compute={ASR_COMPUTE_TYPE})…")
-        _model = WhisperModel(ASR_MODEL, device="cpu", compute_type=ASR_COMPUTE_TYPE)
-        logger.info(f"✅ Whisper pronto — model={ASR_MODEL} lang={ASR_LANGUAGE}")
+        device = (ASR_DEVICE or "auto").strip().lower()
+        device_index = 0
+        if device.startswith("cuda:"):
+            try:
+                device_index = int(device.split(":", 1)[1])
+            except ValueError:
+                device_index = 0
+            device = "cuda"
+        logger.info(f"Caricamento Whisper '{ASR_MODEL}' su {device} (compute={ASR_COMPUTE_TYPE})…")
+        _model = WhisperModel(
+            ASR_MODEL, device=device, device_index=device_index, compute_type=ASR_COMPUTE_TYPE
+        )
+        logger.info(f"✅ Whisper pronto — model={ASR_MODEL} device={device} lang={ASR_LANGUAGE}")
     return _model
 
 

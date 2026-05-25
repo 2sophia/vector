@@ -15,6 +15,10 @@ from utils.docling import PARSER_SUPPORTED_EXTENSIONS
 from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk
 from utils.qdrant import create_qdrant_collection, delete_qdrant_points
 from utils.falkor import delete_graph, purge_file_graph
+from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
+from utils.store_schema import (
+    get_effective_schema, get_schema_doc, set_schema, delete_store_schemas,
+)
 
 # Import DA UTILS (non serve il punto perché siamo fuori dal pacchetto)
 from utils import (
@@ -31,9 +35,14 @@ from utils.schemas import (
     FileAttach,
     VectorStore,
     VectorStoreFile,
+    StoreSchemaUpdate,
 )
 
-from utils.settings import FILES_STORAGE
+from utils.settings import (
+    FILES_STORAGE,
+    CURATION_BOILERPLATE_RATIO,
+    CURATION_BOILERPLATE_MIN_DOCS,
+)
 
 logger = get_logger(__name__)
 
@@ -216,6 +225,76 @@ async def get_vector_store(vector_store_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get vector store: {str(e)}")
 
 
+@router.get("/{vector_store_id}/curation")
+def get_curation_stats(vector_store_id: str):
+    """Metriche di data curation della collection — "quanto boilerplate hai".
+
+    Racconta la tesi del prodotto in un numero: documenti totali, contenuti (body)
+    distinti, quanti sono boilerplate (stesso testo in almeno MIN_DOCS documenti e
+    in oltre RATIO della collection) e la frequenza del più diffuso. Utile anche
+    per tarare le soglie sui dati reali.
+    """
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    stats = curation_stats(
+        vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS
+    )
+    return {
+        "object": "vector_store.curation",
+        "vector_store_id": vector_store_id,
+        "boilerplate_ratio": CURATION_BOILERPLATE_RATIO,
+        "boilerplate_min_docs": CURATION_BOILERPLATE_MIN_DOCS,
+        **stats,
+    }
+
+
+@router.get("/{vector_store_id}/schema")
+def get_store_schema(vector_store_id: str):
+    """Schema di estrazione (entità + relazioni) della collection.
+
+    Il motore (GLiNER / GLiNER-relex) è zero-shot → entità e relazioni sono solo
+    liste di label. Qui ogni vector store definisce il SUO dominio (contratti,
+    cartelle cliniche, circolari…) senza toccare il codice. Ritorna lo schema
+    effettivo (custom se impostato, altrimenti i default globali).
+    """
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    return {
+        "object": "vector_store.schema",
+        "vector_store_id": vector_store_id,
+        "custom": get_schema_doc("store", vector_store_id) is not None,
+        **get_effective_schema(vector_store_id),
+    }
+
+
+@router.put("/{vector_store_id}/schema")
+def put_store_schema(vector_store_id: str, body: StoreSchemaUpdate):
+    """Imposta lo schema di estrazione a livello STORE. Campi None lasciati invariati
+    (eredita il default globale). Vale dal prossimo (re-)ingest dei documenti. Gli
+    override più specifici (directory/sync/file) seguono lo stesso meccanismo a cascata."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    set_schema(
+        "store", vector_store_id, vector_store_id,
+        body.entity_labels, body.relation_labels, body.relations_enabled,
+    )
+    return {
+        "object": "vector_store.schema",
+        "vector_store_id": vector_store_id,
+        "custom": True,
+        **get_effective_schema(vector_store_id),
+    }
+
+
 @router.delete("/{vector_store_id}")
 def delete_vector_store(vector_store_id: str):
     """Delete a vector store and all related jobs/files"""
@@ -233,6 +312,12 @@ def delete_vector_store(vector_store_id: str):
 
         # --- Delete knowledge graph (best-effort) ---
         delete_graph(vector_store_id)
+
+        # --- Delete curation provenance (best-effort) ---
+        delete_collection_bodies(vector_store_id)
+
+        # --- Delete custom extraction schemas, ogni livello (best-effort) ---
+        delete_store_schemas(vector_store_id)
 
         # --- Delete vector store metadata file ---
         metadata_path = os.path.join(FILES_STORAGE, f"{vector_store_id}_metadata.json")
@@ -348,6 +433,9 @@ async def remove_file_from_vector_store(vector_store_id: str, file_id: str):
 
         # --- Delete knowledge graph nodes for this file (best-effort) ---
         await asyncio.to_thread(purge_file_graph, vector_store_id, file_id)
+
+        # --- Delete curation provenance for this file (best-effort) ---
+        await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
 
         # --- Delete job from Mongo ---
         job_delete_result = ingestion_jobs.delete_one(

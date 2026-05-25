@@ -87,6 +87,84 @@ def create_qdrant_collection(store_id: str):
         except Exception as e:
             logger.warning(f"create_payload_index({store_id}, {field}) failed: {e}")
 
+    # Full-text index sul `text` → abilita il canale lessicale/exact-match (MatchText):
+    # recupera i chunk che contengono i token ESATTI della query (codici, riferimenti,
+    # acronimi) dove il dense è debole. Vedi qdrant_lexical_search.
+    ensure_text_index(store_id)
+
+
+# Collezioni con il full-text index già garantito (evita di ricrearlo a ogni ricerca).
+_text_indexed: set = set()
+
+
+def ensure_text_index(collection_name: str) -> bool:
+    """Crea (best-effort, idempotente) il full-text index sul campo `text`. Necessario
+    perché MatchText funzioni. Su collection esistenti l'indice si costruisce senza
+    re-ingest dei punti."""
+    if collection_name in _text_indexed:
+        return True
+    try:
+        qdrant_client.create_payload_index(
+            collection_name=collection_name,
+            field_name="text",
+            field_schema=models.TextIndexParams(
+                type="text",
+                tokenizer=models.TokenizerType.WORD,
+                lowercase=True,
+                min_token_len=2,
+                max_token_len=30,
+            ),
+        )
+        _text_indexed.add(collection_name)
+        return True
+    except Exception as e:
+        # "already exists" → indice già presente, va bene lo stesso
+        if "already" in str(e).lower() or "exist" in str(e).lower():
+            _text_indexed.add(collection_name)
+            return True
+        logger.warning(f"ensure_text_index({collection_name}) failed: {e}")
+        return False
+
+
+def qdrant_lexical_search(collection_name: str, terms, search_data, limit: int = 30):
+    """Canale lessicale / exact-match: ritorna i chunk il cui `text` contiene almeno
+    uno dei `terms` esatti (codici, riferimenti, acronimi), nello stesso scope (slug)
+    della ricerca principale. Ordinati per numero di termini trovati. Rank-based →
+    pensato per essere fuso via RRF col canale vettoriale. Best-effort → [] se errore.
+    """
+    if not terms:
+        return []
+    if not ensure_text_index(collection_name):
+        return []
+    should = [
+        models.FieldCondition(key="text", match=models.MatchText(text=t))
+        for t in terms
+    ]
+    must = []
+    base = build_qdrant_filter(search_data.filters) if getattr(search_data, "filters", None) else None
+    if base is not None:
+        must.append(base)
+    must.append(models.Filter(should=should))  # ≥1 termine
+    try:
+        points, _ = qdrant_client.scroll(
+            collection_name=collection_name,
+            scroll_filter=models.Filter(must=must),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        logger.warning(f"qdrant_lexical_search({collection_name}) failed: {e}")
+        return []
+    lowered = [t.lower() for t in terms]
+
+    def _overlap(p):
+        txt = ((p.payload or {}).get("text") or "").lower()
+        return sum(1 for t in lowered if t in txt)
+
+    points.sort(key=_overlap, reverse=True)
+    return points
+
 
 def build_qdrant_filter(filters: Dict[str, Any]) -> models.Filter:
     """

@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from utils.logger import get_logger
 from utils.settings import (
     GRAPH_ENABLED, FALKOR_HOST, FALKOR_PORT, FALKOR_PASSWORD, FALKOR_GRAPH_PREFIX,
+    CURATION_GRAPH_LINK,
 )
 
 logger = get_logger(__name__)
@@ -92,8 +93,18 @@ def purge_file_graph(vector_store_id: str, file_id: str) -> None:
             """,
             {"fid": file_id, "pre": f"{file_id}::"},
         )
-        # entità rimaste senza menzioni → orfane, si rimuovono (resolution cross-doc)
-        g.query("MATCH (e:Entity) WHERE NOT (e)<-[:MENTIONS]-() DELETE e")
+        # relazioni tipizzate (M5): togli questo file dalla provenienza dell'arco,
+        # poi elimina gli archi rimasti senza alcun file (re-ingest sicuro).
+        g.query(
+            "MATCH ()-[r:REL]->() WHERE $fid IN r.files "
+            "SET r.files = [f IN r.files WHERE f <> $fid]",
+            {"fid": file_id},
+        )
+        g.query("MATCH ()-[r:REL]->() WHERE r.files IS NULL OR size(r.files) = 0 DELETE r")
+        # entità rimaste senza menzioni NÉ relazioni → orfane, si rimuovono
+        g.query("MATCH (e:Entity) WHERE NOT (e)<-[:MENTIONS]-() AND NOT (e)-[:REL]-() DELETE e")
+        # nodi :Content (curation) rimasti senza chunk → orfani, si rimuovono
+        g.query("MATCH (ct:Content) WHERE NOT (ct)<-[:SAME_CONTENT]-() DELETE ct")
     except Exception as e:
         logger.warning(f"purge_file_graph({vector_store_id}, {file_id}) failed: {e}")
 
@@ -161,6 +172,7 @@ def write_document_graph(
         next_pairs: List[List[str]] = []
         entity_nodes: Dict[str, Dict[str, Any]] = {}  # ent_id -> nodo
         mentions: List[Dict[str, Any]] = []           # {chunk, ent, score}
+        content_links: List[Dict[str, str]] = []      # {chunk, hash} (curation)
 
         prev_chunk_id: Optional[str] = None
         for pos, ch in enumerate(chunks):
@@ -192,7 +204,10 @@ def write_document_graph(
                 "text": ch.get("text") or "",
                 "file_id": file_id,
                 "filename": filename,
+                "body_hash": ch.get("body_hash"),
             })
+            if ch.get("body_hash"):
+                content_links.append({"chunk": chunk_id, "hash": ch["body_hash"]})
             if leaf_section_id:
                 chunk_in_section.append({"chunk": chunk_id, "section": leaf_section_id})
             else:
@@ -258,7 +273,7 @@ def write_document_graph(
                 MERGE (c:Chunk {id:ch.id})
                 SET c.chunk_index=ch.idx, c.page=ch.page,
                     c.qdrant_point_id=ch.point_id, c.text=ch.text, c.slug=$slug,
-                    c.file_id=ch.file_id, c.filename=ch.filename
+                    c.file_id=ch.file_id, c.filename=ch.filename, c.body_hash=ch.body_hash
                 """,
                 {"chunks": chunk_rows, "slug": slug},
             )
@@ -315,6 +330,23 @@ def write_document_graph(
                 {"mentions": mentions},
             )
 
+        # 10) data curation: nodo :Content condiviso per body_hash. Più chunk (di
+        # documenti diversi) che puntano allo stesso :Content = stesso contenuto
+        # ripetuto → la molteplicità diventa segnale ("boilerplate in N doc")
+        # invece di essere buttata. Il conteggio autoritativo per la soppressione
+        # sta su Mongo (curation_bodies); qui è la struttura navigabile del grafo.
+        if CURATION_GRAPH_LINK and content_links:
+            g.query(
+                """
+                UNWIND $links AS l
+                MERGE (ct:Content {id:l.hash})
+                WITH ct, l
+                MATCH (c:Chunk {id:l.chunk})
+                MERGE (c)-[:SAME_CONTENT]->(ct)
+                """,
+                {"links": content_links},
+            )
+
         logger.info(
             f"📊 graph[{vector_store_id}] doc={file_id}: "
             f"{len(chunk_rows)} chunk, {len(sections)} sezioni, "
@@ -323,6 +355,76 @@ def write_document_graph(
         return True
     except Exception as e:
         logger.warning(f"write_document_graph({vector_store_id}, {file_id}) failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# M5 — relazioni tipizzate (GLiNER-relex)
+# ---------------------------------------------------------------------------
+
+def write_relations(
+    vector_store_id: str, file_id: str, relations: List[Dict[str, Any]]
+) -> bool:
+    """Scrive archi tipizzati (:Entity)-[:REL {type,score,files}]->(:Entity).
+
+    `relations`: lista di dict {head_name, head_type, head_norm, tail_name,
+    tail_type, tail_norm, relation, score} (da utils.relations.extract_relations_batch).
+    Aggrega per (head_id, type, tail_id) tenendo lo score massimo; i nodi :Entity
+    usano lo STESSO id `"{type}::{norm}"` della NER → gli archi agganciano gli entity
+    node esistenti (MERGE), non ne creano paralleli. La provenienza per-file (`files`)
+    consente il purge corretto su re-ingest. Best-effort: errori loggati, non sollevati.
+    Idempotente per file: `write_document_graph` ha già fatto il purge del file prima.
+    """
+    g = _graph(vector_store_id)
+    if g is None or not relations:
+        return False
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    agg: Dict[tuple, float] = {}
+    for r in relations:
+        hid = f"{r['head_type']}::{r['head_norm']}"
+        tid = f"{r['tail_type']}::{r['tail_norm']}"
+        if hid == tid:
+            continue
+        nodes[hid] = {"id": hid, "name": r["head_name"], "type": r["head_type"],
+                      "normalized_name": r["head_norm"]}
+        nodes[tid] = {"id": tid, "name": r["tail_name"], "type": r["tail_type"],
+                      "normalized_name": r["tail_norm"]}
+        key = (hid, r["relation"], tid)
+        s = float(r.get("score", 0.0))
+        if key not in agg or s > agg[key]:
+            agg[key] = s
+    if not agg:
+        return False
+
+    try:
+        g.query(
+            """
+            UNWIND $nodes AS e
+            MERGE (x:Entity {id:e.id})
+            SET x.name=e.name, x.type=e.type, x.normalized_name=e.normalized_name
+            """,
+            {"nodes": list(nodes.values())},
+        )
+        edges = [{"h": h, "type": ty, "t": t, "score": sc, "fid": file_id}
+                 for (h, ty, t), sc in agg.items()]
+        g.query(
+            """
+            UNWIND $edges AS e
+            MATCH (h:Entity {id:e.h}), (t:Entity {id:e.t})
+            MERGE (h)-[r:REL {type:e.type}]->(t)
+            SET r.score = CASE WHEN r.score IS NULL OR e.score > r.score
+                               THEN e.score ELSE r.score END,
+                r.files = CASE WHEN r.files IS NULL THEN [e.fid]
+                               WHEN e.fid IN r.files THEN r.files
+                               ELSE r.files + e.fid END
+            """,
+            {"edges": edges},
+        )
+        logger.info(f"🔗 graph[{vector_store_id}] doc={file_id}: {len(edges)} relazioni tipizzate")
+        return True
+    except Exception as e:
+        logger.warning(f"write_relations({vector_store_id}, {file_id}) failed: {e}")
         return False
 
 

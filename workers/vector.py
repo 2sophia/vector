@@ -10,6 +10,7 @@ Garantisce:
 - cleanup orfani: in caso di failure a metà upload, rimuove i punti parziali
 """
 
+import os
 import uuid
 import shutil
 import asyncio
@@ -25,8 +26,12 @@ from utils.docling import upload_file_for_chunking_sync
 from utils.convert import normalize_for_parser, UnsupportedFormatError
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
-from utils.falkor import write_document_graph, purge_file_graph
+from utils.falkor import write_document_graph, purge_file_graph, write_relations
 from utils.entities import extract_entities_batch, warmup as entities_warmup
+from utils.relations import extract_relations_batch
+from utils.curation import body_hash, register_document_bodies, purge_file_bodies
+from utils.store_schema import get_effective_schema
+from utils.settings import CURATION_ENABLED
 
 # ---------------------------------------------------------------------------
 # Config (centralizzata in utils/config, prefisso SOPHIA_VECTOR_)
@@ -124,6 +129,8 @@ async def cleanup_superseded(job: Dict[str, Any], collection_name: str) -> None:
         await purge_file_points(collection_name, old_id)
         # rimuovi anche i nodi grafo del vecchio file (best-effort)
         await asyncio.to_thread(purge_file_graph, collection_name, old_id)
+        if CURATION_ENABLED:
+            await asyncio.to_thread(purge_file_bodies, collection_name, old_id)
         await asyncio.to_thread(
             jobs_coll.delete_many,
             {"vector_store_id": collection_name, "file_id": old_id},
@@ -148,8 +155,25 @@ async def handle_job(job: Dict[str, Any]):
 
     logger.info(f"[{tag}] Start ingestion file_id={file_id} path={file_path}")
 
+    # Guard file rotto: mancante o 0 byte → FAILED subito, niente parse inutile.
+    # Casi reali visti in prod: download SharePoint fallito che lascia un file vuoto,
+    # o PDF corrotto a 0 byte → Docling darebbe PdfiumError e 0 chunk "COMPLETED"
+    # silenziosi (il problema resta invisibile). Meglio un FAILED esplicito.
+    try:
+        size = os.path.getsize(file_path)
+    except OSError:
+        size = -1
+    if size <= 0:
+        reason = "file mancante su disco" if size < 0 else "file vuoto (0 byte)"
+        logger.warning(f"[{tag}] {reason} → FAILED")
+        await set_job_status(job_id, "FAILED", {"error": reason})
+        return
+
     # Idempotenza: rimuovi eventuali punti pre-esistenti per questo file
     await purge_file_points(vector_store_id, file_id)
+    # ...e le entry di provenienza curation (conteggi boilerplate corretti su re-ingest)
+    if CURATION_ENABLED:
+        await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
 
     # 0) Normalizza per il parser: i formati che Docling non mangia (mail,
     # Office binario, rtf, odf, txt) vengono convertiti in una tempdir prima del
@@ -178,11 +202,16 @@ async def handle_job(job: Dict[str, Any]):
 
     chunks = result.get("chunks") or []
     if not chunks:
-        logger.info(f"[{tag}] No chunks produced, COMPLETED (empty)")
-        # nessun chunk → assicura che non restino nodi grafo del file (re-ingest svuotato)
+        # File valido ma nessun contenuto estraibile (scansione vuota, PDF corrotto
+        # non a 0 byte, doc senza testo). → FAILED, non COMPLETED: un COMPLETED muto
+        # direbbe "indicizzato" mentre il sistema non ha tirato fuori NULLA — l'utente
+        # deve saperlo e poter agire. NON chiamo cleanup_superseded: se esisteva una
+        # versione precedente buona resta indicizzata (non la cancello perché il
+        # re-parse ha prodotto zero). I punti/grafo di QUESTO file sono già stati
+        # ripuliti a inizio job (idempotenza) → niente residui.
+        logger.warning(f"[{tag}] 0 chunk estratti → FAILED (nessun contenuto estraibile)")
         await asyncio.to_thread(purge_file_graph, vector_store_id, file_id)
-        await cleanup_superseded(job, vector_store_id)
-        await set_job_status(job_id, "COMPLETED", {"stats.num_chunks": 0})
+        await set_job_status(job_id, "FAILED", {"error": "nessun contenuto estraibile dal file"})
         return
 
     logger.info(f"[{tag}] Docling produced {len(chunks)} chunks")
@@ -192,6 +221,23 @@ async def handle_job(job: Dict[str, Any]):
     attributes = job.get("attributes") or {}
     # Accumula i chunk (con il point_id Qdrant) per scrivere il grafo a fine job.
     graph_chunks: List[Dict[str, Any]] = []
+    # Body-hash distinti del documento (curation): un disclaimer ripetuto N volte
+    # nello stesso file conta una volta sola → set, registrato a fine job.
+    doc_body_hashes: set = set()
+    # Relazioni tipizzate del documento (M5, GLiNER-relex): accumulate e scritte a
+    # fine job (write_relations aggrega/dedup per (head,type,tail)).
+    doc_relations: List[Dict[str, Any]] = []
+    # Schema di estrazione EFFETTIVO, risolto a cascata file→directory→sync→store→
+    # default globale (utils.store_schema). Mantiene il motore agnostico: il dominio
+    # (quali entità/relazioni, e se estrarre relazioni) è config, al livello giusto.
+    directory_slug = attributes.get("sophia_directory_slug")
+    sync_id = job.get("sharepoint_job_id")
+    schema = await asyncio.to_thread(
+        get_effective_schema, vector_store_id, directory_slug, sync_id, file_id
+    )
+    entity_labels = schema["entity_labels"]
+    relation_labels = schema["relation_labels"]
+    relations_on = schema["relations_enabled"]
 
     for batch_start in range(0, len(chunks), INGEST_BATCH_SIZE):
         batch = chunks[batch_start: batch_start + INGEST_BATCH_SIZE]
@@ -229,10 +275,21 @@ async def handle_job(job: Dict[str, Any]):
 
         # Entity extraction (M3, best-effort: un guasto qui non fa fallire il job)
         try:
-            chunk_entities = await asyncio.to_thread(extract_entities_batch, texts)
+            chunk_entities = await asyncio.to_thread(extract_entities_batch, texts, entity_labels)
         except Exception as e:
             logger.warning(f"[{tag}] entity extraction failed at batch {batch_num}: {e}")
             chunk_entities = [[] for _ in texts]
+
+        # Relation extraction (M5, opt-in dallo schema effettivo, best-effort)
+        if relations_on:
+            try:
+                rel_batch = await asyncio.to_thread(
+                    extract_relations_batch, texts, entity_labels, relation_labels
+                )
+                for rels in rel_batch:
+                    doc_relations.extend(rels)
+            except Exception as e:
+                logger.warning(f"[{tag}] relation extraction failed at batch {batch_num}: {e}")
 
         # Costruisci PointStruct.
         # Gli attributes vengono APPIATTITI top-level (contratto prod): es.
@@ -260,6 +317,11 @@ async def handle_job(job: Dict[str, Any]):
                 vector={"dense": dense, "sparse": sparse},
                 payload=payload,
             ))
+            # body-hash del chunk (testo senza prefisso heading): identifica lo
+            # stesso contenuto tra documenti/sezioni diversi → segnale boilerplate.
+            bh = body_hash(doc["text"], doc["headings"]) if CURATION_ENABLED else None
+            if bh:
+                doc_body_hashes.add(bh)
             # stesso point_id sul nodo :Chunk → ponte grafo ↔ Qdrant
             graph_chunks.append({
                 "chunk_index": doc["chunk_index"],
@@ -267,6 +329,7 @@ async def handle_job(job: Dict[str, Any]):
                 "page_numbers": doc["page_numbers"],
                 "text": doc["text"],
                 "qdrant_point_id": point_id,
+                "body_hash": bh,
                 "entities": chunk_entities[i] if i < len(chunk_entities) else [],
             })
 
@@ -301,6 +364,17 @@ async def handle_job(job: Dict[str, Any]):
         get_timestamp(),
         graph_chunks,
     )
+
+    # 3b) Provenienza curation: registra in quali documenti compare ogni body
+    # (fonte di verità per la soppressione boilerplate a search-time). Best-effort.
+    if CURATION_ENABLED and doc_body_hashes:
+        await asyncio.to_thread(
+            register_document_bodies, vector_store_id, file_id, list(doc_body_hashes)
+        )
+
+    # 3c) Relazioni tipizzate (M5, additivo, best-effort): archi :REL tra entità.
+    if relations_on and doc_relations:
+        await asyncio.to_thread(write_relations, vector_store_id, file_id, doc_relations)
 
     # 4) Completato — ora che i nuovi chunk sono indicizzati, rimuovi i vecchi
     # file sostituiti (re-ingest sicuro: solo dopo il successo).

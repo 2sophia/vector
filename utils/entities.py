@@ -16,7 +16,10 @@ import re
 from typing import Any, Dict, List
 
 from utils.logger import get_logger
-from utils.settings import GLINER_ENABLED, GLINER_MODEL, GLINER_THRESHOLD, GLINER_LABELS
+from utils.device import resolve_device
+from utils.settings import (
+    GLINER_ENABLED, GLINER_MODEL, GLINER_THRESHOLD, GLINER_LABELS, GLINER_DEVICE,
+)
 
 logger = get_logger(__name__)
 
@@ -34,18 +37,19 @@ def _get_model():
     try:
         from gliner import GLiNER
 
-        logger.info(f"Caricamento GLiNER '{GLINER_MODEL}' su CPU (one-time)…")
+        device = resolve_device(GLINER_DEVICE, what="GLiNER")
+        logger.info(f"Caricamento GLiNER '{GLINER_MODEL}' su {device} (one-time)…")
         _model = GLiNER.from_pretrained(GLINER_MODEL)
-        # NER deterministica su CPU: la GPU resta a embeddings/parser.
+        # Device scelto dal dev (default CPU: la GPU resta a embeddings/parser).
         try:
-            _model = _model.to("cpu")
-        except Exception:
-            pass
+            _model = _model.to(device)
+        except Exception as e:
+            logger.warning(f"GLiNER .to({device}) fallito, resto su CPU: {e}")
         # Logga il device reale dei pesi: così nei log è inequivocabile.
         try:
             dev = next(_model.model.parameters()).device
         except Exception:
-            dev = "cpu"
+            dev = device
         logger.info(f"✅ GLiNER pronto — device={dev} · model={GLINER_MODEL}")
         return _model
     except Exception as e:
@@ -128,13 +132,17 @@ def _windows(text: str) -> List[str]:
     return out
 
 
-def extract_entities_batch(texts: List[str]) -> List[List[Dict[str, Any]]]:
+def extract_entities_batch(
+    texts: List[str], labels: List[str] | None = None
+) -> List[List[Dict[str, Any]]]:
     """Estrae le entità per una lista di testi (un chunk per testo).
 
-    GLiNER su finestre (per non troncare i chunk lunghi) + regex sul testo intero.
-    Ritorna una lista allineata a `texts`: results[i] = entità del chunk i.
-    Best-effort.
+    `labels`: schema entità per-collection (vedi utils.store_schema); se None usa
+    il default globale GLINER_LABELS. GLiNER su finestre (per non troncare i chunk
+    lunghi) + regex sul testo intero. Ritorna una lista allineata a `texts`:
+    results[i] = entità del chunk i. Best-effort.
     """
+    gliner_labels = labels or GLINER_LABELS
     n = len(texts)
     results: List[List[Dict[str, Any]]] = [[] for _ in range(n)]
 
@@ -148,7 +156,7 @@ def extract_entities_batch(texts: List[str]) -> List[List[Dict[str, Any]]]:
                 segments.append(w)
                 owners.append(i)
         try:
-            batch = model.inference(segments, GLINER_LABELS, threshold=GLINER_THRESHOLD)
+            batch = model.inference(segments, gliner_labels, threshold=GLINER_THRESHOLD)
             for seg_i, ents in enumerate(batch):
                 owner = owners[seg_i]
                 for e in ents:

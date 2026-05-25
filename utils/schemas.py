@@ -12,6 +12,14 @@ from .logger import get_logger
 logger = get_logger(__name__)
 
 
+class StoreSchemaUpdate(BaseModel):
+    """Schema di estrazione (entità + relazioni, zero-shot) per un livello del cascade.
+    Tutti opzionali: None lascia il campo invariato (eredita il livello sotto)."""
+    entity_labels: Optional[List[str]] = None
+    relation_labels: Optional[List[str]] = None
+    relations_enabled: Optional[bool] = None
+
+
 class VectorStoreCreate(BaseModel):
     name: str
     metadata: Optional[Dict[str, Any]] = {}
