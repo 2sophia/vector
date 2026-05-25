@@ -15,6 +15,10 @@ from utils.database import db
 from utils.logger import get_logger
 from utils.qdrant import delete_qdrant_points
 from utils.filesystem import delete_file_from_disk
+from utils.schemas import StoreSchemaUpdate
+from utils.store_schema import (
+    set_schema, get_schema_doc, get_effective_schema, delete_schema_doc,
+)
 from utils.sharepoint.cleanup import run_cleanup, CleanupStats
 from utils.sharepoint.ingestion import (
     IngestConfig,
@@ -411,6 +415,63 @@ async def list_sharepoint_jobs():
     return {"object": "list", "data": data}
 
 
+def _sync_schema_response(ingestion_id, vs):
+    """own = override impostato a livello sync; effective = schema risolto a cascata
+    (sync→store→default). Una sync può alimentare più cartelle: questo schema vale
+    per tutti i file che porta, salvo override più specifici a livello directory/file."""
+    return {
+        "object": "sync.schema",
+        "ingestion_id": ingestion_id,
+        "vector_store_id": vs,
+        "own": get_schema_doc("sync", ingestion_id),
+        "effective": get_effective_schema(vs, sync_id=ingestion_id),
+    }
+
+
+@router.get("/sharepoint/{ingestion_id}/schema")
+async def get_sync_schema(ingestion_id: str):
+    """Schema di estrazione a livello SYNC (override locale + effettivo risolto)."""
+    try:
+        oid = ObjectId(ingestion_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ingestion_id non valido")
+    job = await asyncio.to_thread(sharepoint_jobs.find_one, {"_id": oid})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job non trovato")
+    return _sync_schema_response(ingestion_id, job.get("vector_store_id", ""))
+
+
+@router.put("/sharepoint/{ingestion_id}/schema")
+async def put_sync_schema(ingestion_id: str, body: StoreSchemaUpdate):
+    """Override schema a livello sync (campi None = eredita). Vale dal prossimo
+    (re-)ingest dei file portati da questa sync."""
+    try:
+        oid = ObjectId(ingestion_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ingestion_id non valido")
+    job = await asyncio.to_thread(sharepoint_jobs.find_one, {"_id": oid})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job non trovato")
+    vs = job.get("vector_store_id", "")
+    await asyncio.to_thread(
+        set_schema, "sync", ingestion_id, vs,
+        body.entity_labels, body.relation_labels, body.relations_enabled,
+    )
+    return _sync_schema_response(ingestion_id, vs)
+
+
+@router.delete("/sharepoint/{ingestion_id}/schema")
+async def reset_sync_schema(ingestion_id: str):
+    """Rimuove l'override a livello sync → torna a ereditare (store/default)."""
+    try:
+        ObjectId(ingestion_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ingestion_id non valido")
+    await asyncio.to_thread(delete_schema_doc, "sync", ingestion_id)
+    job = await asyncio.to_thread(sharepoint_jobs.find_one, {"_id": ObjectId(ingestion_id)})
+    return _sync_schema_response(ingestion_id, (job or {}).get("vector_store_id", ""))
+
+
 @router.delete("/sharepoint/{ingestion_id}")
 async def delete_sharepoint_job(
         ingestion_id: str,
@@ -449,6 +510,8 @@ async def delete_sharepoint_job(
         await asyncio.to_thread(ingestion_jobs.delete_many, {"sharepoint_job_id": job_oid})
 
     await asyncio.to_thread(sharepoint_jobs.delete_one, {"_id": job_oid})
+    # rimuovi l'eventuale override schema di questa sync (best-effort)
+    await asyncio.to_thread(delete_schema_doc, "sync", ingestion_id)
 
     return {
         "id": ingestion_id,

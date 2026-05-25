@@ -19,6 +19,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SchemaEditor } from "@/components/schema-editor";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { RESERVED_PROP_KEYS, softSlug, softPropKey } from "@/lib/validation";
@@ -170,6 +171,9 @@ export default function VectorStoreDetailPage() {
             {error}
           </div>
         )}
+
+        {/* Estrazione a livello store (default per tutte le directory) */}
+        <SchemaEditor basePath={`/vector_stores/${vectorStoreId}`} levelLabel="store" />
 
         {dirs.length === 0 ? (
           <Card>

@@ -15,6 +15,7 @@ import {
   Plug,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -24,6 +25,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { SourceBrowser, type BrowseFolder } from "@/components/source-browser";
+import { SchemaEditor } from "@/components/schema-editor";
+import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -292,6 +295,7 @@ export default function DirectoryDetailPage() {
   const [spJobs, setSpJobs] = useState<SpJob[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [resyncingId, setResyncingId] = useState<string | null>(null);
+  const [schemaSyncId, setSchemaSyncId] = useState<string | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("status");
   const [fileQuery, setFileQuery] = useState("");
@@ -594,6 +598,9 @@ export default function DirectoryDetailPage() {
           </div>
         )}
 
+        {/* Estrazione (schema entità/relazioni a livello directory) */}
+        <SchemaEditor basePath={`/directories/${directoryId}`} levelLabel="directory" canReset />
+
         {/* Upload manuale */}
         <Card>
           <CardHeader className="pb-3">
@@ -788,6 +795,15 @@ export default function DirectoryDetailPage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
+                                  onClick={() => setSchemaSyncId(j.id)}
+                                  title="Schema di estrazione per questa sync"
+                                >
+                                  <Sparkles className="size-4" />
+                                  Estrazione
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
                                   onClick={() => handleResync(j)}
                                   disabled={resyncingId === j.id || j.status === "PROCESSING"}
                                 >
@@ -971,6 +987,22 @@ export default function DirectoryDetailPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Dialog: schema di estrazione per una singola sync */}
+        <Dialog open={!!schemaSyncId} onOpenChange={(o) => !o && setSchemaSyncId(null)}>
+          <DialogHeader>
+            <DialogTitle>Estrazione · sync</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            {schemaSyncId && (
+              <SchemaEditor
+                basePath={`/ingest/sharepoint/${schemaSyncId}`}
+                levelLabel="sync"
+                canReset
+              />
+            )}
+          </DialogBody>
+        </Dialog>
       </div>
     </div>
   );

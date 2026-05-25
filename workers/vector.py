@@ -231,7 +231,9 @@ async def handle_job(job: Dict[str, Any]):
     # default globale (utils.store_schema). Mantiene il motore agnostico: il dominio
     # (quali entità/relazioni, e se estrarre relazioni) è config, al livello giusto.
     directory_slug = attributes.get("sophia_directory_slug")
-    sync_id = job.get("sharepoint_job_id")
+    # sharepoint_job_id è un ObjectId nei job: str() per combaciare con lo scope
+    # "sync" salvato dall'endpoint (ingestion_id = str(ObjectId)).
+    sync_id = str(job["sharepoint_job_id"]) if job.get("sharepoint_job_id") else None
     schema = await asyncio.to_thread(
         get_effective_schema, vector_store_id, directory_slug, sync_id, file_id
     )

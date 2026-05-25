@@ -20,7 +20,10 @@ from utils.database import db
 from utils.settings import FILES_STORAGE
 from utils.qdrant import qdrant_client, create_qdrant_collection, delete_qdrant_points
 from utils.filesystem import delete_file_from_disk
-from utils.schemas import DirectoryCreate, DirectoryUpdate, DirectoryResponse
+from utils.schemas import DirectoryCreate, DirectoryUpdate, DirectoryResponse, StoreSchemaUpdate
+from utils.store_schema import (
+    set_schema, get_schema_doc, get_effective_schema, delete_schema_doc,
+)
 
 logger = get_logger(__name__)
 
@@ -198,6 +201,54 @@ async def get_directory(directory_id: str):
     return _to_response(doc)
 
 
+def _dir_schema_response(directory_id, vs, slug):
+    """own = override impostato a livello directory; effective = schema risolto a
+    cascata (dir→sync→store→default). La UI mostra cosa è locale vs ereditato."""
+    return {
+        "object": "directory.schema",
+        "directory_id": directory_id,
+        "vector_store_id": vs,
+        "slug": slug,
+        "own": get_schema_doc("dir", f"{vs}:{slug}"),
+        "effective": get_effective_schema(vs, directory_slug=slug),
+    }
+
+
+@router.get("/{directory_id}/schema")
+async def get_directory_schema(directory_id: str):
+    """Schema di estrazione a livello DIRECTORY (override locale + effettivo risolto)."""
+    doc = await asyncio.to_thread(directories_coll.find_one, {"_id": directory_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    return _dir_schema_response(directory_id, doc["vector_store_id"], doc.get("slug", ""))
+
+
+@router.put("/{directory_id}/schema")
+async def put_directory_schema(directory_id: str, body: StoreSchemaUpdate):
+    """Override schema a livello directory (campi None = eredita). Vale dal prossimo
+    (re-)ingest dei file della directory."""
+    doc = await asyncio.to_thread(directories_coll.find_one, {"_id": directory_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    vs, slug = doc["vector_store_id"], doc.get("slug", "")
+    await asyncio.to_thread(
+        set_schema, "dir", f"{vs}:{slug}", vs,
+        body.entity_labels, body.relation_labels, body.relations_enabled,
+    )
+    return _dir_schema_response(directory_id, vs, slug)
+
+
+@router.delete("/{directory_id}/schema")
+async def reset_directory_schema(directory_id: str):
+    """Rimuove l'override a livello directory → torna a ereditare (sync/store/default)."""
+    doc = await asyncio.to_thread(directories_coll.find_one, {"_id": directory_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    vs, slug = doc["vector_store_id"], doc.get("slug", "")
+    await asyncio.to_thread(delete_schema_doc, "dir", f"{vs}:{slug}")
+    return _dir_schema_response(directory_id, vs, slug)
+
+
 @router.patch("/{directory_id}", response_model=DirectoryResponse)
 async def update_directory(directory_id: str, data: DirectoryUpdate):
     """Aggiorna name/properties. Lo slug NON è modificabile (spaccherebbe i file)."""
@@ -231,6 +282,8 @@ async def delete_directory(directory_id: str):
 
     vector_store_id = doc["vector_store_id"]
     slug = doc.get("slug", "")
+    # rimuovi l'eventuale override schema di questa directory (best-effort)
+    await asyncio.to_thread(delete_schema_doc, "dir", f"{vector_store_id}:{slug}")
     job_query = {"vector_store_id": vector_store_id, f"attributes.{SLUG_FIELD}": slug}
 
     # 1) File su disco (per ogni file_id dei job della directory)
