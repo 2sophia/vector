@@ -40,6 +40,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# LibreOffice headless: conversione pre-parser dei formati che Docling non mangia
+# (Office binario 97-2003 .doc/.ppt/.xls, .rtf, ODF .odt/.ods/.odp → docx/pptx/xlsx).
+# ffmpeg/ffprobe: estrazione traccia audio dai video + durata, per l'ASR
+# (faster-whisper, vedi utils/transcribe.py). Vedi utils/convert.py.
+# default-jre-headless serve a Calc per alcune conversioni .xls/.ods; i font
+# evitano warning/sostituzioni in fase di conversione.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
+    default-jre-headless fonts-dejavu-core ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Utente non privilegiato per il runtime
 RUN useradd --create-home --uid 1000 --shell /bin/bash sophia
 

@@ -20,3 +20,9 @@ torch
 gliner
 python-dotenv
 rich
+# conversione mail Outlook .msg → HTML (pre-parser, vedi utils/convert.py).
+# .eml usa la stdlib; l'Office binario/.rtf/.odf passa da LibreOffice (Dockerfile).
+extract-msg
+# trascrizione audio/video su CPU (lazy, vedi utils/transcribe.py). Richiede
+# ffmpeg (Dockerfile) per estrarre l'audio dai video.
+faster-whisper

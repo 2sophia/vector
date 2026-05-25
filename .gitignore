@@ -15,6 +15,9 @@ storage/
 .claude
 CLAUDE.md
 .env.bak-20260524
+
+# Custom
+data-curation-dedup-sota.md
 falkordb-graph-research.md
 
 # Frontend (Next.js / Node)

@@ -24,6 +24,7 @@ from .settings import (
     PARSER_TABLE_CELL_MATCHING,
     PARSER_PDF_BACKEND,
     PARSER_MAX_WAIT_SECONDS,
+    ASR_ENABLED,
 )
 
 MAX_RETRIES = 3
@@ -37,12 +38,40 @@ REQUEST_TIMEOUT = (CONNECT_TIMEOUT_SECONDS, float(PARSER_MAX_WAIT_SECONDS))
 logger = logging.getLogger("docling")
 logger.setLevel(logging.DEBUG)
 
-# Estensioni accettate per l'ingest (deve restare allineato a convert_from_formats
-# in _build_chunking_params / _build_convert_params).
-PARSER_SUPPORTED_EXTENSIONS = {
-    ".pdf", ".docx", ".pptx", ".html", ".htm", ".md", ".xlsx",
-    ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif",
+# Formati che Docling parsa NATIVAMENTE (allineati a convert_from_formats in
+# _build_chunking_params / _build_convert_params). Verificati su docling-serve
+# 1.19. NB: audio/video (pipeline "asr") NON sono qui: l'enum li dichiara ma il
+# modello ASR non è caricato nella nostra build → darebbero FAILED.
+PARSER_NATIVE_EXTENSIONS = {
+    ".pdf", ".docx", ".pptx", ".html", ".htm", ".xhtml", ".md", ".xlsx",
+    ".csv", ".adoc", ".asciidoc", ".tex", ".vtt",
+    ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif", ".webp",
 }
+
+# Audio/video: trascritti in casa con faster-whisper → VTT (vedi utils/transcribe),
+# poi Docling chunka il VTT. Entrano nella whitelist SOLO se ASR_ENABLED, altrimenti
+# un file audio verrebbe accettato e poi fallirebbe. Modello lazy: si carica al
+# primo file, non all'avvio del worker.
+ASR_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".wma", ".aac", ".opus"}
+ASR_VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".m4v"}
+
+# Formati che NON sono nativi ma convertiamo noi prima del parser
+# (vedi utils/convert.py): mail, Office binario 97-2003, RTF, ODF, testo, +audio/video.
+PARSER_CONVERTIBLE_EXTENSIONS = {
+    ".eml", ".msg",            # mail → HTML
+    ".doc", ".rtf", ".odt",    # word-like → docx
+    ".ppt", ".odp",            # slide-like → pptx
+    ".xls", ".ods",            # sheet-like → xlsx
+    ".txt",                    # testo → md
+}
+if ASR_ENABLED:
+    PARSER_CONVERTIBLE_EXTENSIONS = (
+        PARSER_CONVERTIBLE_EXTENSIONS | ASR_AUDIO_EXTENSIONS | ASR_VIDEO_EXTENSIONS
+    )
+
+# Whitelist usata dai validate (upload manuale + fail-fast SharePoint): un file
+# è accettato se Docling lo parsa direttamente o se sappiamo convertirlo.
+PARSER_SUPPORTED_EXTENSIONS = PARSER_NATIVE_EXTENSIONS | PARSER_CONVERTIBLE_EXTENSIONS
 
 # Validazione PARSER_TABLE_MODE
 if PARSER_TABLE_MODE not in ("fast", "accurate"):
@@ -75,11 +104,18 @@ def _build_chunking_params() -> dict[str, Any]:
         "target_type": "inbody",
 
         # Convert configuration (prefisso "convert_")
-        "convert_from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "xlsx"],
+        "convert_from_formats": [
+            "docx", "pptx", "html", "image", "pdf",
+            "asciidoc", "md", "csv", "xlsx", "latex", "vtt",
+        ],
         "convert_image_export_mode": "placeholder",
+        # OCR: do_ocr da config (default True); force_ocr SEMPRE False — force_ocr
+        # rimpiazzerebbe il testo nativo con quello OCR su TUTTO (lento e peggiore
+        # sui PDF con text layer). Così l'OCR scatta solo su immagini/scansioni.
+        # ocr_engine è DEPRECATED nell'API docling (default "auto", sceglie lui):
+        # non lo passiamo. Le lingue restano esplicite per la qualità su IT.
         "convert_do_ocr": PARSER_USE_OCR,
         "convert_force_ocr": False,
-        "convert_ocr_engine": "easyocr",
         "convert_ocr_lang": ["it", "en"],
         "convert_pdf_backend": PARSER_PDF_BACKEND,
         "convert_table_mode": PARSER_TABLE_MODE,
@@ -123,7 +159,10 @@ def _build_convert_params() -> dict[str, Any]:
     return {
         # Output configuration
         "target_type": "inbody",
-        "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "xlsx"],
+        "from_formats": [
+            "docx", "pptx", "html", "image", "pdf",
+            "asciidoc", "md", "csv", "xlsx", "latex", "vtt",
+        ],
         "to_formats": ["md"],
 
         # Image configuration
@@ -131,10 +170,9 @@ def _build_convert_params() -> dict[str, Any]:
         "include_images": False,
         "images_scale": 0.1,
 
-        # OCR configuration
+        # OCR: vedi note in _build_chunking_params. ocr_engine deprecato → omesso.
         "do_ocr": PARSER_USE_OCR,
         "force_ocr": False,
-        "ocr_engine": "easyocr",
         "ocr_lang": ["it", "en"],
 
         # PDF configuration

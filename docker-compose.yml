@@ -4,7 +4,7 @@ services:
 #  # Sophia Vector — FastAPI backend + Next.js frontend (single image)
 #  # ==========================================================================
 #  sophia-vector:
-#    image: sophiacloud/vector:0.1.0-alpha
+#    image: sophiacloud/vector:0.2.0-alpha
 #    container_name: sophia-vector
 #    pull_policy: always
 #    command: ["--frontend"]

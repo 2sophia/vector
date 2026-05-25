@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Sophia Vector"
-    APP_VERSION: str = "0.1.0-alpha"
+    APP_VERSION: str = "0.2.0-alpha"
     DEBUG: bool = False
 
     # --- Auth / sicurezza ---
@@ -79,7 +79,12 @@ class Settings(BaseSettings):
     # Chunk più piccoli = retrieval più preciso; il contesto perso viene
     # recuperato a query time dal grafo (:NEXT). Vedi M4 graph-augmented retrieval.
     PARSER_MODEL_MAX_TOKENS: int = 512
-    PARSER_USE_OCR: bool = False
+    # OCR acceso di default: i PDF scansionati e le immagini vengono letti.
+    # Si abbina a force_ocr=False (in utils/docling.py): l'OCR scatta SOLO sulle
+    # pagine/immagini senza text layer — i PDF nativi non vengono ri-OCR-ati
+    # (force_ocr=True farebbe "solo OCR" su tutto = lento e peggiore sul testo
+    # nativo). Disattivabile con SOPHIA_VECTOR_PARSER_USE_OCR=false.
+    PARSER_USE_OCR: bool = True
     PARSER_PICTURE_DESCRIPTION: bool = False
     # "fast" e non "accurate": su tabelle a celle larghe (es. circolari
     # "categoria | descrizione") TableFormer accurate inventa griglie con
@@ -93,6 +98,19 @@ class Settings(BaseSettings):
     # Timeout per-documento inviato a Docling. Default alto (prod); le istanze
     # Docling con un massimo più basso (es. dev = 1800s) vanno sotto quel tetto.
     PARSER_MAX_WAIT_SECONDS: int = 36000
+
+    # --- ASR (trascrizione audio/video; faster-whisper su CPU) ---
+    # Stesso pattern di GLiNER: il modello si carica LAZY al primo file audio/video
+    # e resta caldo nel processo del vector worker (nessun costo se non arriva
+    # audio). ASR_ENABLED=False → audio/video escono dalla whitelist (rifiutati a
+    # monte invece di fallire). I limiti di durata sono lo "sweet spot" Sophia: il
+    # dev li alza via env per file più lunghi. Modello: tiny|base|small|medium|large-v3.
+    ASR_ENABLED: bool = True
+    ASR_MODEL: str = "small"
+    ASR_LANGUAGE: str = "it"
+    ASR_COMPUTE_TYPE: str = "int8"
+    ASR_MAX_AUDIO_MINUTES: int = 60
+    ASR_MAX_VIDEO_MINUTES: int = 30
 
     # --- Ingestion worker (tuning; ex env legacy os.getenv senza prefisso) ---
     INGEST_BATCH_SIZE: int = 64

@@ -18,6 +18,9 @@ chunks and offers **graph-augmented retrieval**. Backend and frontend ship in th
 
 - **OpenAI-compatible API** — drop-in vector store endpoints under `/v1/*`
 - **Hybrid search** — dense + sparse retrieval with **cross-encoder reranking** (BGE-M3)
+- **Wide format coverage** — documents, legacy Office, email, images (**OCR**) and **audio/video**
+  (local Whisper transcription); a pre-parser layer converts whatever Docling can't read natively.
+  See [Supported formats](#supported-formats)
 - **Knowledge graph (FalkorDB)** — every document becomes `Document → Section → Chunk` with a
   reading-order `:NEXT` chain, plus deterministic **entity extraction** (GLiNER zero-shot NER +
   regex for IBAN / codice fiscale / P.IVA — **no LLM in ingestion**)
@@ -31,6 +34,30 @@ chunks and offers **graph-augmented retrieval**. Backend and frontend ship in th
 - **Management frontend** — Next.js + NextAuth (email/password + optional Azure AD)
 - **Async, idempotent ingestion** — background worker, content-hash dedup, safe re-ingest
   (index-new-then-delete-old)
+
+## Supported formats
+
+Anything Docling doesn't read natively is normalized by a **pre-parser layer**
+(`utils/convert.py`) before chunking, so the same hybrid-search + graph pipeline works
+across all of these:
+
+| Category | Formats | Handling |
+|---|---|---|
+| Documents | PDF, DOCX, PPTX, XLSX, HTML/XHTML, Markdown, CSV, AsciiDoc, LaTeX | native (Docling) |
+| Legacy / OpenDocument | DOC, PPT, XLS, RTF, ODT, ODP, ODS | → OOXML via LibreOffice |
+| Email | EML, MSG | → HTML |
+| Images | PNG, JPG, TIFF, BMP, GIF, WEBP | native, **OCR** for scanned text |
+| Audio | WAV, MP3, M4A, OGG, FLAC, AAC, … | → VTT via local Whisper |
+| Video | MP4, MOV, AVI, MKV, WEBM, … | audio track → VTT via Whisper |
+| Subtitles | VTT | native |
+
+OCR and audio/video transcription run **on CPU, in-process** — no external service or GPU —
+and load lazily on first use (like GLiNER). Transcription is gated by `SOPHIA_VECTOR_ASR_ENABLED`
+with duration caps (60 min audio / 30 min video, tunable). The accepted extensions are exposed at
+`GET /v1/files/supported-formats` (single source of truth, consumed by upload, SharePoint and the UI).
+
+The list is **verified end-to-end** by `tests/verify_formats.py`, which regenerates
+[`tests/SUPPORTED_FORMATS.md`](tests/SUPPORTED_FORMATS.md).
 
 ## Architecture
 
@@ -87,7 +114,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 ```bash
 ./compile-and-publish.sh [version]            # multi-arch (amd64 + arm64) + push
 # or just amd64 (faster):
-docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.1.0-alpha --push .
+docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.2.0-alpha --push .
 ```
 
 On the prod host, copy `.env.prod` → `.env` (only secrets + `NEXTAUTH_URL`; service URLs are
@@ -112,6 +139,11 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_SECRET_KEY`            | —                                      | Fernet key, encrypts source secrets      |
 | `SOPHIA_VECTOR_PARSER_MODEL_MAX_TOKENS` | `512`                                | Chunk size in tokens (Docling)           |
 | `SOPHIA_VECTOR_PARSER_MAX_WAIT_SECONDS` | `36000`                              | Per-doc parse timeout (≤ docling's max)  |
+| `SOPHIA_VECTOR_PARSER_USE_OCR`        | `true`                                 | OCR scanned PDFs/images (force_ocr off)  |
+| `SOPHIA_VECTOR_ASR_ENABLED`           | `true`                                 | Transcribe audio/video locally (Whisper) |
+| `SOPHIA_VECTOR_ASR_MODEL`             | `small`                                | Whisper model (tiny…large-v3)            |
+| `SOPHIA_VECTOR_ASR_MAX_AUDIO_MINUTES` | `60`                                   | Reject audio longer than this            |
+| `SOPHIA_VECTOR_ASR_MAX_VIDEO_MINUTES` | `30`                                   | Reject video longer than this            |
 | `SOPHIA_VECTOR_GRAPH_ENABLED`         | `true`                                 | Enable the FalkorDB knowledge graph      |
 | `SOPHIA_VECTOR_FALKOR_HOST`           | `localhost`                            | FalkorDB host                            |
 | `SOPHIA_VECTOR_FALKOR_PASSWORD`       | `falkordb`                             | FalkorDB password (`requirepass`)        |
@@ -130,6 +162,7 @@ POST /v1/vector_stores/{id}/search                 # hybrid + graph-augmented se
 
 # Files
 POST|GET /v1/files    GET|DELETE /v1/files/{id}    GET /v1/files/{id}/content
+GET /v1/files/supported-formats                    # accepted extensions (source of truth)
 
 # Directories (slug + custom properties; how the UI groups files in a store)
 POST|GET /v1/directories    GET|PATCH|DELETE /v1/directories/{id}
@@ -188,7 +221,7 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 ## Version
 
-Current version: **0.1.0-alpha**
+Current version: **0.2.0-alpha**
 
 ## License
 

@@ -12,6 +12,10 @@ dev-start.sh
 DEVELOPERS.md
 docker-compose.yml
 
+# Custom
+data-curation-dedup-sota.md
+falkordb-graph-research.md
+
 # =========================
 # Python
 # =========================
@@ -80,3 +84,7 @@ examples/
 # Docker
 # =========================
 Dockerfile
+
+# Other
+docs
+tests

@@ -296,6 +296,11 @@ export default function DirectoryDetailPage() {
   const [sortMode, setSortMode] = useState<SortMode>("status");
   const [fileQuery, setFileQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  // `accept` del file picker: viene dalla source of truth backend
+  // (/files/supported-formats). Fallback prudente se l'endpoint non risponde.
+  const [acceptAttr, setAcceptAttr] = useState<string>(
+    ".pdf,.docx,.pptx,.html,.htm,.xlsx,.md,.png,.jpg,.jpeg,.tiff,.bmp,.gif",
+  );
 
   // Sources disponibili
   useEffect(() => {
@@ -307,6 +312,18 @@ export default function DirectoryDetailPage() {
         setSourceId((cur) => cur || (list[0]?.id ?? ""));
       } catch {
         /* sources opzionali */
+      }
+    })();
+  }, []);
+
+  // Estensioni accettate dalla source of truth backend (niente lista duplicata).
+  useEffect(() => {
+    (async () => {
+      try {
+        const f = await api.get<{ extensions: string[] }>("/files/supported-formats");
+        if (f.extensions?.length) setAcceptAttr(f.extensions.join(","));
+      } catch {
+        /* resta il fallback */
       }
     })();
   }, []);
@@ -622,7 +639,7 @@ export default function DirectoryDetailPage() {
                 id="file-upload"
                 type="file"
                 multiple
-                accept=".pdf,.docx,.pptx,.html,.htm,.xlsx,.md,.png,.jpg,.jpeg,.tiff,.bmp,.gif"
+                accept={acceptAttr}
                 className="sr-only"
                 disabled={!dir}
                 onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}

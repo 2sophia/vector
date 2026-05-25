@@ -1,0 +1,38 @@
+From: Mario Rossi <mario@example.com>
+To: ufficio@vivibanca.it
+Subject: Richiesta apertura conto
+Date: Mon, 25 May 2026 10:00:00 +0200
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============1306945304001292606=="
+
+--===============1306945304001292606==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Buongiorno, parole chiave: obblighi di trasparenza verso il cliente, IBAN IT6=
+0X0542811101000000123456, codice fiscale RSSMRA80A01H501U.
+
+--===============1306945304001292606==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<!doctype html><html><head><meta charset=3D"utf-8"><title>Documento di prova =
+Sophia Vector</title></head>
+<body>
+<h1>Documento di prova Sophia Vector</h1>
+<p>Questo documento verifica la pipeline di ingestion. Parole chiave: obbligh=
+i di trasparenza verso il cliente, IBAN IT60X0542811101000000123456, codice f=
+iscale RSSMRA80A01H501U.</p>
+<h2>Tabella anagrafica</h2>
+<table border=3D"1">
+<tr><th>Nome</th><th>IBAN</th><th>Filiale</th></tr>
+<tr><td>Mario Rossi</td><td>IT60X0542811101000000123456</td><td>Torino</td></=
+tr>
+<tr><td>Luca Bianchi</td><td>IT60X0542811101000000999888</td><td>Milano</td><=
+/tr>
+</table>
+</body></html>
+
+--===============1306945304001292606==--

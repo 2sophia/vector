@@ -11,6 +11,7 @@ Garantisce:
 """
 
 import uuid
+import shutil
 import asyncio
 import logging
 from typing import List, Dict, Any
@@ -21,6 +22,7 @@ from utils import get_timestamp
 from utils.database import db
 from utils.qdrant import qdrant_client, delete_qdrant_points
 from utils.docling import upload_file_for_chunking_sync
+from utils.convert import normalize_for_parser, UnsupportedFormatError
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
 from utils.falkor import write_document_graph, purge_file_graph
@@ -149,13 +151,30 @@ async def handle_job(job: Dict[str, Any]):
     # Idempotenza: rimuovi eventuali punti pre-esistenti per questo file
     await purge_file_points(vector_store_id, file_id)
 
-    # 1) Chunking via Docling
+    # 0) Normalizza per il parser: i formati che Docling non mangia (mail,
+    # Office binario, rtf, odf, txt) vengono convertiti in una tempdir prima del
+    # chunking. I formati nativi passano invariati (tmp_dir=None).
     try:
-        result = await asyncio.to_thread(upload_file_for_chunking_sync, file_path)
+        parse_path, tmp_dir = await asyncio.to_thread(normalize_for_parser, file_path)
+    except UnsupportedFormatError as e:
+        logger.warning(f"[{tag}] Unsupported format {e}, FAILED")
+        await set_job_status(job_id, "FAILED", {"error": f"Unsupported format: {e}"})
+        return
+    except Exception as e:
+        logger.exception(f"[{tag}] Pre-parser conversion failed: {e}")
+        await set_job_status(job_id, "FAILED", {"error": f"Conversion error: {e}"})
+        return
+
+    # 1) Chunking via Docling (sul file normalizzato; tempdir ripulita a fine parse)
+    try:
+        result = await asyncio.to_thread(upload_file_for_chunking_sync, parse_path)
     except Exception as e:
         logger.exception(f"[{tag}] Docling chunking failed: {e}")
         await set_job_status(job_id, "FAILED", {"error": f"Chunking error: {e}"})
         return
+    finally:
+        if tmp_dir:
+            await asyncio.to_thread(shutil.rmtree, tmp_dir, ignore_errors=True)
 
     chunks = result.get("chunks") or []
     if not chunks:
