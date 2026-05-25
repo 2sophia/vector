@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Sophia Vector"
-    APP_VERSION: str = "0.2.0-alpha"
+    APP_VERSION: str = "0.3.0-alpha"
     DEBUG: bool = False
 
     # --- Auth / sicurezza ---

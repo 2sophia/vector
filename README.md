@@ -18,15 +18,27 @@ chunks and offers **graph-augmented retrieval**. Backend and frontend ship in th
 
 - **OpenAI-compatible API** — drop-in vector store endpoints under `/v1/*`
 - **Hybrid search** — dense + sparse retrieval with **cross-encoder reranking** (BGE-M3)
+- **Multi-channel retrieval + RRF** — the vector channel is fused with an optional graph channel
+  and a **lexical/exact-match channel** (full-text over the chunk index) via Reciprocal Rank
+  Fusion, then a single rerank. The lexical channel catches codes/references the dense retriever
+  misses (e.g. `D.lgs 231/2001`)
 - **Wide format coverage** — documents, legacy Office, email, images (**OCR**) and **audio/video**
   (local Whisper transcription); a pre-parser layer converts whatever Docling can't read natively.
   See [Supported formats](#supported-formats)
 - **Knowledge graph (FalkorDB)** — every document becomes `Document → Section → Chunk` with a
   reading-order `:NEXT` chain, plus deterministic **entity extraction** (GLiNER zero-shot NER +
-  regex for IBAN / codice fiscale / P.IVA — **no LLM in ingestion**)
+  regex for IBAN / codice fiscale / P.IVA — **no LLM in ingestion**) and optional **typed
+  relations** between entities (GLiNER-relex, zero-shot, off by default)
+- **Configurable extraction schema** — the GLiNER engine is zero-shot, so *what* to extract is
+  data: entity labels, relation labels and the relations toggle resolve through a
+  **file → directory → sync → store → global** cascade, editable from the UI at every level
 - **Graph-augmented retrieval** — Qdrant finds the chunks, the graph expands the neighbourhood
   (chunks sharing entities + adjacent chunks), then a unified rerank. Entity expansion is
   IDF-weighted so common "stopword-entities" don't dominate
+- **Content curation** — near-duplicate chunks shared across many documents (headers/footers,
+  boilerplate) are detected by content hash and suppressed at search time
+- **Per-model device** — place GLiNER/relex and Whisper independently on CPU or a specific GPU
+  (`SOPHIA_VECTOR_GLINER_DEVICE` / `ASR_DEVICE`), with graceful CPU fallback
 - **Multi-source ingestion** — provider abstraction (SharePoint enabled; Google Drive/Workspace/S3
   as placeholders) with per-source **encrypted credentials** (Fernet)
 - **Scheduled sync** — internal cron (configurable from the UI), replaces system crontab; run
@@ -114,7 +126,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 ```bash
 ./compile-and-publish.sh [version]            # multi-arch (amd64 + arm64) + push
 # or just amd64 (faster):
-docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.2.0-alpha --push .
+docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.3.0-alpha --push .
 ```
 
 On the prod host, copy `.env.prod` → `.env` (only secrets + `NEXTAUTH_URL`; service URLs are
@@ -149,7 +161,12 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_FALKOR_PASSWORD`       | `falkordb`                             | FalkorDB password (`requirepass`)        |
 | `SOPHIA_VECTOR_FALKOR_GRAPH_PREFIX`   | _(empty)_                              | Graph-name namespace (multi-project)     |
 | `SOPHIA_VECTOR_GLINER_MODEL`          | `urchade/gliner_multi-v2.1`            | GLiNER NER model (multilingual)          |
-| `SOPHIA_VECTOR_GLINER_LABELS`         | `organizzazione,persona,…`             | Entity labels (CSV, zero-shot)           |
+| `SOPHIA_VECTOR_GLINER_LABELS`         | `organizzazione,persona,…`             | Entity labels (CSV, zero-shot default)   |
+| `SOPHIA_VECTOR_GLINER_DEVICE`         | `cpu`                                  | GLiNER/relex device (`cpu`/`cuda`/`auto`)|
+| `SOPHIA_VECTOR_ASR_DEVICE`            | `cpu`                                  | Whisper device (`cpu`/`cuda`/`auto`)     |
+| `SOPHIA_VECTOR_RELATIONS_ENABLED`     | `false`                                | Typed relation extraction (GLiNER-relex) |
+| `SOPHIA_VECTOR_RELATIONS_LABELS`      | `pubblicato da,emesso da,…`            | Relation labels (CSV, zero-shot default) |
+| `SOPHIA_VECTOR_CURATION_ENABLED`      | `true`                                 | Boilerplate detection + suppression      |
 | `SOPHIA_VECTOR_INTERNAL_API_URL`      | `http://127.0.0.1:8100`                | Scheduler → backend (internal)           |
 
 ## API Endpoints
@@ -158,7 +175,9 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 # Vector stores
 POST|GET /v1/vector_stores              GET|DELETE /v1/vector_stores/{id}
 GET|DELETE /v1/vector_stores/{id}/files            # list / attach / remove files
-POST /v1/vector_stores/{id}/search                 # hybrid + graph-augmented search
+POST /v1/vector_stores/{id}/search                 # multi-channel + graph-augmented search
+GET|PUT /v1/vector_stores/{id}/schema              # extraction schema (store scope)
+GET /v1/vector_stores/{id}/curation                # content-curation stats
 
 # Files
 POST|GET /v1/files    GET|DELETE /v1/files/{id}    GET /v1/files/{id}/content
@@ -166,10 +185,12 @@ GET /v1/files/supported-formats                    # accepted extensions (source
 
 # Directories (slug + custom properties; how the UI groups files in a store)
 POST|GET /v1/directories    GET|PATCH|DELETE /v1/directories/{id}
+GET|PUT|DELETE /v1/directories/{id}/schema         # extraction schema (directory scope)
 
 # Ingestion sources (multi-provider, encrypted secrets)
 GET /v1/sources/types    POST|GET /v1/sources    GET /v1/sources/{id}/browse
 POST /v1/ingest/sharepoint    POST /v1/ingest/sharepoint/{id}/sync    DELETE /v1/ingest/sharepoint/{id}
+GET|PUT|DELETE /v1/ingest/sharepoint/{id}/schema   # extraction schema (sync scope)
 
 # Scheduled sync (internal cron)
 GET|PUT /v1/sync/schedule/{type}    GET /v1/sync/runs/{type}
@@ -189,15 +210,19 @@ curl -X POST http://localhost:8100/v1/vector_stores/vs_abc123/search \
   }'
 ```
 
-Each result carries `attributes._source` (`qdrant` / `graph:mentions` / `graph:next`) and
-`attributes._via` (the bridge entities) so you can see *why* a chunk was retrieved.
+The vector and (when `graph_expand` is set) graph channels are joined with a **lexical channel**
+that fires automatically when the query contains codes/references, then fused with RRF and a single
+rerank. Each result carries `attributes._source` (`qdrant` / `lexical` / `graph:mentions` /
+`graph:next`) and `attributes._via` (the bridge entities) so you can see *why* a chunk was retrieved.
 
 ## Knowledge graph
 
 One FalkorDB graph per vector store (same name as the Qdrant collection). Nodes:
 `:Document` → `:Section` → `:Chunk` (with `qdrant_point_id` bridging to Qdrant), `:Chunk -[:NEXT]->`
 for reading order, and `:Chunk -[:MENTIONS]-> :Entity` (entities shared across documents via
-`MERGE` → cross-document resolution). Inspect it from the FalkorDB UI or via Cypher, e.g.:
+`MERGE` → cross-document resolution). With relation extraction enabled, entities are also linked by
+**typed** `:REL {type,score}` edges (GLiNER-relex, e.g. `DECRETO —emesso da→ PRESIDENTE DELLA REPUBBLICA`).
+Inspect it from the FalkorDB UI or via Cypher, e.g.:
 
 ```cypher
 MATCH (d:Document)-[:HAS_CHUNK|HAS_SECTION*]->(:Chunk)-[:MENTIONS]->(e:Entity)
@@ -221,7 +246,7 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 ## Version
 
-Current version: **0.2.0-alpha**
+Current version: **0.3.0-alpha**
 
 ## License
 

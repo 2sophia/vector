@@ -3,7 +3,7 @@
 # Next.js nello stesso container) e push sul registry.
 set -euo pipefail
 
-VERSION="${1:-0.2.0-alpha}"
+VERSION="${1:-0.3.0-alpha}"
 
 docker buildx build \
   -f Dockerfile \
