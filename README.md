@@ -63,10 +63,12 @@ across all of these:
 | Video | MP4, MOV, AVI, MKV, WEBM, … | audio track → VTT via Whisper |
 | Subtitles | VTT | native |
 
-OCR and audio/video transcription run **on CPU, in-process** — no external service or GPU —
-and load lazily on first use (like GLiNER). Transcription is gated by `SOPHIA_VECTOR_ASR_ENABLED`
-with duration caps (60 min audio / 30 min video, tunable). The accepted extensions are exposed at
-`GET /v1/files/supported-formats` (single source of truth, consumed by upload, SharePoint and the UI).
+OCR and audio/video transcription run **in-process**, no external service, and load lazily on
+first use (like GLiNER). They default to **CPU** (no GPU required); the in-process models
+(GLiNER/relex, Whisper) can be moved onto a GPU — see [GPU acceleration](#gpu-acceleration-optional).
+Transcription is gated by `SOPHIA_VECTOR_ASR_ENABLED` with duration caps (60 min audio / 30 min
+video, tunable). The accepted extensions are exposed at `GET /v1/files/supported-formats`
+(single source of truth, consumed by upload, SharePoint and the UI).
 
 The list is **verified end-to-end** by `tests/verify_formats.py`, which regenerates
 [`tests/SUPPORTED_FORMATS.md`](tests/SUPPORTED_FORMATS.md).
@@ -90,7 +92,7 @@ The list is **verified end-to-end** by `tests/verify_formats.py`, which regenera
         ├────────────────────>│  BGE-M3      │  embeddings + cross-encoder rerank
         │                     └──────────────┘
         │                     ┌──────────────┐
-        └────────────────────>│  GLiNER      │  zero-shot NER (entity extraction, CPU)
+        └────────────────────>│  GLiNER      │  zero-shot NER + relations (CPU or GPU)
                               └──────────────┘
 ```
 
@@ -124,8 +126,9 @@ cp -n .env.example .env          # set at least NEXTAUTH_SECRET
 The `sophia-vector` service in `docker-compose.yml` runs the published image. Build & push with:
 
 ```bash
-./compile-and-publish.sh [version]            # multi-arch (amd64 + arm64) + push
-# or just amd64 (faster):
+./compile-and-publish.sh [version]            # CPU image, multi-arch (amd64 + arm64) + push
+./compile-and-publish.sh [version] cuda       # GPU image (torch cu130), amd64 → :<version>-cuda
+# or directly:
 docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.3.0-alpha --push .
 ```
 
@@ -135,6 +138,34 @@ baked into the image), then:
 ```bash
 docker compose pull sophia-vector && docker compose up -d sophia-vector
 ```
+
+### GPU acceleration (optional)
+
+The default image is **CPU-only** (torch CPU wheels): GLiNER, GLiNER-relex and Whisper run on CPU,
+which is fine for moderate volumes. To run them on a GPU, build the **CUDA flavor**
+(`Dockerfile.cuda`, torch cu130, ~2 GB larger):
+
+```bash
+./compile-and-publish.sh 0.3.0-alpha cuda     # → sophiacloud/vector:0.3.0-alpha-cuda
+```
+
+Then point the compose service at the `-cuda` image, give it the GPU (host needs the NVIDIA driver
++ `nvidia-container-toolkit`), and opt the models in via env:
+
+```yaml
+# docker-compose.yml (sophia-vector service)
+image: sophiacloud/vector:0.3.0-alpha-cuda
+deploy:
+  resources:
+    reservations:
+      devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+environment:
+  SOPHIA_VECTOR_GLINER_DEVICE: cuda    # GLiNER + GLiNER-relex on GPU
+  SOPHIA_VECTOR_ASR_DEVICE: cuda       # Whisper on GPU
+```
+
+On the CPU image these knobs are inert (no CUDA → graceful fallback to CPU), so the same env is
+safe everywhere.
 
 ## Configuration
 
@@ -241,8 +272,8 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 ## API Documentation
 
-- Swagger UI: `http://localhost:8100/docs`
-- ReDoc: `http://localhost:8100/redoc`
+- API reference (Scalar): `http://localhost:8100/docs`
+- Raw OpenAPI schema: `http://localhost:8100/openapi.json`
 
 ## Version
 
