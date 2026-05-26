@@ -83,6 +83,22 @@ def render_banner() -> None:
             )
         else:
             grid.add_row("  Relations", f"[bright_black]off (lazy)[/bright_black]  {_dot(False)}")
+        if settings.CLASSIFIER_ENABLED:
+            grid.add_row(
+                "  Classifier",
+                f"[white]{settings.CLASSIFIER_MODEL}[/white]  [bright_black]·[/bright_black]  "
+                f"[yellow]{settings.GLINER_DEVICE}[/yellow]  {_dot(True)}",
+            )
+        else:
+            grid.add_row("  Classifier", f"[bright_black]off (opt-in)[/bright_black]  {_dot(False)}")
+        if settings.ASR_ENABLED:
+            grid.add_row(
+                "  ASR",
+                f"[white]whisper:{settings.ASR_MODEL}[/white]  [bright_black]·[/bright_black]  "
+                f"[yellow]{settings.ASR_DEVICE}[/yellow]  {_dot(True)}",
+            )
+        else:
+            grid.add_row("  ASR", f"[bright_black]off[/bright_black]  {_dot(False)}")
 
         panel = Panel(
             Group(wordmark, subtitle, Text(""), grid),
