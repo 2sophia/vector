@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Search as SearchIcon,
   Loader2,
@@ -12,6 +13,8 @@ import {
   ChevronDown,
   SlidersHorizontal,
   Sparkles,
+  Share2,
+  Box,
   Copy,
   Check,
   Download,
@@ -23,6 +26,14 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { GraphData } from "@/components/graph-viewer";
+import { NODE_COLORS } from "@/components/graph-viewer";
+
+// force-graph + three: client-only
+const GraphViewer = dynamic(
+  () => import("@/components/graph-viewer").then((m) => m.GraphViewer),
+  { ssr: false },
+);
 
 type VectorStore = { id: string; name: string };
 type SearchResult = {
@@ -40,6 +51,10 @@ type SearchResponse = {
   data: SearchResult[];
   query: string;
   usage?: Record<string, unknown>;
+};
+type SubGraph = GraphData & {
+  seed_ids?: string[];
+  metadata?: { node_count?: number; edge_count?: number; query_time_ms?: number };
 };
 
 // Provenienza di un risultato (campo _source iniettato da M4)
@@ -103,11 +118,19 @@ export default function SearchPage() {
 
   const [results, setResults] = useState<SearchResult[]>([]);
   const [raw, setRaw] = useState<SearchResponse | null>(null);
-  const [view, setView] = useState<"cards" | "json">("cards");
+  const [view, setView] = useState<"cards" | "json" | "graph">("cards");
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // search-as-graph (vista "graph")
+  const [graphData, setGraphData] = useState<SubGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [view3D, setView3D] = useState(false);
+  const [graphSelected, setGraphSelected] = useState<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState({ w: 800, h: 560 });
 
   useEffect(() => {
     (async () => {
@@ -125,6 +148,8 @@ export default function SearchPage() {
     if (!storeId || !query.trim()) return;
     setSearching(true);
     setError(null);
+    setGraphData(null); // invalida il grafo: si ricarica alla prossima vista "graph"
+    setGraphSelected(null);
     const t0 = performance.now();
     try {
       const body: Record<string, unknown> = {
@@ -147,6 +172,50 @@ export default function SearchPage() {
       setSearching(false);
     }
   }
+
+  // carica il sottografo dei risultati (search-as-graph) — lazy alla prima vista "graph"
+  const loadGraph = useCallback(async () => {
+    if (!storeId || !query.trim()) return;
+    setGraphLoading(true);
+    try {
+      const body: Record<string, unknown> = {
+        query: query.trim(),
+        max_num_results: topK,
+        graph_expand: graphExpand,
+        graph_neighbors: neighbors,
+        graph_df_max: dfMax,
+      };
+      if (slug.trim()) body.filters = { sophia_directory_slug: slug.trim() };
+      const res = await api.post<{ graph: SubGraph }>(
+        `/vector_stores/${storeId}/search/graph`,
+        body,
+      );
+      setGraphData(res.graph);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setGraphLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId, query, topK, graphExpand, neighbors, dfMax, slug]);
+
+  // alla prima apertura della vista grafo (per la query corrente) carica il sottografo
+  useEffect(() => {
+    if (view === "graph" && raw && !graphData && !graphLoading) loadGraph();
+  }, [view, raw, graphData, graphLoading, loadGraph]);
+
+  // dimensioni del canvas force-graph
+  useEffect(() => {
+    if (view !== "graph") return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setDims({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setDims({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, [view, graphData]);
+
+  const seedSet = useMemo(() => new Set(graphData?.seed_ids ?? []), [graphData]);
 
   async function copyJson() {
     if (!raw) return;
@@ -324,21 +393,25 @@ export default function SearchPage() {
             </div>
             {/* switch vista cards/json */}
             <div className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-800">
-              {(["cards", "json"] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                    view === v
-                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                      : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
-                  )}
-                >
-                  {v === "cards" ? <LayoutList className="size-3.5" /> : <Code2 className="size-3.5" />}
-                  {v === "cards" ? "Cards" : "JSON"}
-                </button>
-              ))}
+              {(["cards", "json", "graph"] as const).map((v) => {
+                const Icon = v === "cards" ? LayoutList : v === "json" ? Code2 : Share2;
+                const label = v === "cards" ? "Cards" : v === "json" ? "JSON" : "Graph";
+                return (
+                  <button
+                    key={v}
+                    onClick={() => setView(v)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                      view === v
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+                    )}
+                  >
+                    <Icon className="size-3.5" />
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -427,6 +500,59 @@ export default function SearchPage() {
                 </Card>
               );
             })}
+          </div>
+        )}
+
+        {/* ===== GRAPH VIEW (search-as-graph) ===== */}
+        {raw && view === "graph" && (
+          <div
+            ref={wrapRef}
+            className="relative h-[70vh] overflow-hidden rounded-lg border border-zinc-800 bg-[#09090b]"
+          >
+            {/* toolbar: 2D/3D + meta + legenda */}
+            <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setView3D((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs font-medium text-zinc-100 backdrop-blur hover:bg-white/20"
+              >
+                <Box className="size-3.5" />
+                {view3D ? "Vista 2D" : "Vista 3D"}
+              </button>
+              {graphData?.metadata && (
+                <span className="rounded-md bg-white/10 px-2 py-1 text-[11px] text-zinc-300 backdrop-blur">
+                  {graphData.metadata.node_count} nodi · {graphData.metadata.edge_count} archi ·{" "}
+                  {seedSet.size} risultati
+                </span>
+              )}
+            </div>
+            {/* legenda */}
+            <div className="absolute bottom-3 left-3 z-20 flex flex-wrap gap-2">
+              {["Document", "Chunk", "Entity"].map((l) => (
+                <span key={l} className="inline-flex items-center gap-1.5 rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-zinc-200 backdrop-blur">
+                  <span className="size-2.5 rounded-full" style={{ backgroundColor: NODE_COLORS[l] }} />
+                  {l}
+                </span>
+              ))}
+            </div>
+
+            {graphLoading ? (
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-zinc-400">
+                <Loader2 className="size-4 animate-spin" /> Ricostruzione del grafo…
+              </div>
+            ) : graphData && graphData.nodes.length ? (
+              <GraphViewer
+                graphData={graphData}
+                width={dims.w}
+                height={dims.h}
+                view3D={view3D}
+                selectedNode={graphSelected}
+                onNodeClick={(n) => setGraphSelected(n?.id ?? null)}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-center text-sm text-zinc-400">
+                Nessun grafo per questi risultati (il knowledge graph potrebbe essere disattivo).
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -34,6 +34,22 @@ logger = get_logger(__name__)
 
 _model = None
 _model_failed = False
+_device = "cpu"  # device reale dei pesi, per un empty_cache mirato
+
+# Testi per chiamata di inference. relex lavora sui CHUNK INTERI (non a finestre) e
+# fa NER+RE joint: passarli tutti insieme fa esplodere la VRAM su GPU. 8 tiene il
+# picco basso (su CPU è ininfluente).
+_RELEX_INFER_BATCH = 8
+
+
+def _empty_cache() -> None:
+    """Libera la cache CUDA dopo un batch. No-op su CPU."""
+    if _device.startswith("cuda"):
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 def _too_long(name: str) -> bool:
@@ -47,7 +63,7 @@ def _get_model():
     # attivare le relazioni anche se il default globale è OFF (schema a cascata). Il
     # gating "estraggo o no" sta nel worker (relations_on effettivo); qui carico
     # solo on-demand. _model_failed evita di ritentare il load a ogni chunk.
-    global _model, _model_failed
+    global _model, _model_failed, _device
     if _model_failed:
         return None
     if _model is not None:
@@ -62,7 +78,8 @@ def _get_model():
             _model = _model.to(device)
         except Exception as e:
             logger.warning(f"relex .to({device}) fallito, resto su CPU: {e}")
-        logger.info(f"✅ GLiNER-relex pronto — model={RELATIONS_MODEL}")
+        _device = device
+        logger.info(f"✅ GLiNER-relex pronto — device={device} · model={RELATIONS_MODEL}")
         return _model
     except Exception as e:
         _model_failed = True
@@ -116,19 +133,27 @@ def extract_relations_batch(
         return out
 
     try:
-        ents_batch, rels_batch = model.inference(
-            texts=texts,
-            labels=ent_labels,
-            relations=rel_labels,
-            threshold=RELATIONS_ENTITY_THRESHOLD,
-            relation_threshold=RELATIONS_THRESHOLD,
-            adjacency_threshold=RELATIONS_ADJACENCY_THRESHOLD,
-            return_relations=True,
-            flat_ner=False,
-        )
+        # mini-batch dei testi: limita il picco di attivazioni su GPU
+        ents_batch: List[Any] = []
+        rels_batch: List[Any] = []
+        for s in range(0, len(texts), _RELEX_INFER_BATCH):
+            eb, rb = model.inference(
+                texts=texts[s:s + _RELEX_INFER_BATCH],
+                labels=ent_labels,
+                relations=rel_labels,
+                threshold=RELATIONS_ENTITY_THRESHOLD,
+                relation_threshold=RELATIONS_THRESHOLD,
+                adjacency_threshold=RELATIONS_ADJACENCY_THRESHOLD,
+                return_relations=True,
+                flat_ner=False,
+            )
+            ents_batch.extend(eb)
+            rels_batch.extend(rb)
     except Exception as e:
         logger.warning(f"GLiNER-relex inference failed: {e}")
         return out
+    finally:
+        _empty_cache()  # rilascia la cache CUDA del picco di attivazioni
 
     for i in range(n):
         ents = ents_batch[i] if i < len(ents_batch) else []

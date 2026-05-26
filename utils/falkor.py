@@ -528,3 +528,167 @@ def expand_neighbors(
             logger.warning(f"expand_neighbors next ({vector_store_id}) failed: {e}")
 
     return list(out.values())
+
+
+# --- Export per la visualizzazione (knowledge-graph viz, force-graph) ---
+
+_GRAPH_DISPLAY = {  # label -> proprietà usata come "name" del nodo nel viewer
+    "Document": "filename",
+    "Section": "title",
+    "Entity": "name",
+}
+
+
+def _node_name(label: str, props: Dict[str, Any]) -> str:
+    if label == "Chunk":
+        t = (props.get("text") or "").strip().replace("\n", " ")
+        return (t[:70] + "…") if len(t) > 70 else (t or f"chunk {props.get('idx', '')}")
+    if label == "Content":
+        return f"content {(props.get('hash') or '')[:8]}"
+    key = _GRAPH_DISPLAY.get(label)
+    if key and props.get(key):
+        return props[key]
+    return props.get("name") or props.get("title") or props.get("filename") or label
+
+
+def _slim_props(props: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(props or {})
+    # tronca il testo dei chunk (può essere ~2k char) per non gonfiare il payload
+    if isinstance(out.get("text"), str) and len(out["text"]) > 300:
+        out["text"] = out["text"][:300] + "…"
+    return out
+
+
+def export_graph(vector_store_id: str, limit: int = 2000) -> Dict[str, Any]:
+    """Esporta il grafo del vector store come {nodes, links, metadata} per il viewer
+    force-graph (`links`, non `edges`). Best-effort: grafo vuoto se FalkorDB è giù.
+    `limit` = numero massimo di nodi; gli archi sono tenuti solo tra i nodi esportati."""
+    import time
+    g = _graph(vector_store_id)
+    if g is None:
+        return {"nodes": [], "links": [],
+                "metadata": {"node_count": 0, "edge_count": 0, "graph_enabled": False}}
+    t0 = time.time()
+    nodes: List[Dict[str, Any]] = []
+    kept: set = set()
+    try:
+        nres = g.query(
+            "MATCH (n) RETURN id(n), labels(n), properties(n) LIMIT $lim",
+            {"lim": int(limit)},
+        ).result_set
+        for nid, labels, props in nres:
+            label = labels[0] if labels else "Node"
+            props = props or {}
+            nodes.append({"id": str(nid), "label": label,
+                          "name": _node_name(label, props), "properties": _slim_props(props)})
+            kept.add(nid)
+    except Exception as e:
+        logger.warning(f"export_graph nodes ({vector_store_id}) failed: {e}")
+        return {"nodes": [], "links": [], "metadata": {"node_count": 0, "edge_count": 0, "error": str(e)}}
+
+    links: List[Dict[str, Any]] = []
+    try:
+        eres = g.query("MATCH (a)-[r]->(b) RETURN id(a), id(b), type(r)").result_set
+        for a, b, rtype in eres:
+            if a in kept and b in kept:
+                links.append({"source": str(a), "target": str(b), "type": rtype})
+    except Exception as e:
+        logger.warning(f"export_graph edges ({vector_store_id}) failed: {e}")
+
+    return {"nodes": nodes, "links": links, "metadata": {
+        "node_count": len(nodes), "edge_count": len(links),
+        "query_time_ms": round((time.time() - t0) * 1000, 1),
+        "truncated": len(nodes) >= int(limit),
+    }}
+
+
+def subgraph_for_points(
+    vector_store_id: str,
+    point_ids: List[str],
+    include_relations: bool = True,
+    include_next: bool = False,
+) -> Dict[str, Any]:
+    """Ricostruisce il sottografo attorno a un insieme di chunk (per `qdrant_point_id`):
+    i chunk seed + il loro Documento di provenienza + le Entità menzionate + (opz) le
+    relazioni tipizzate :REL tra quelle entità e i chunk adiacenti :NEXT. È il backing
+    della "search-as-graph": dai risultati di una ricerca si vede il dato ricostruito.
+    Ritorna {nodes, links, metadata, seed_ids}. Best-effort → vuoto se grafo off/errore."""
+    import time
+    empty = {"nodes": [], "links": [], "metadata": {"node_count": 0, "edge_count": 0}, "seed_ids": []}
+    g = _graph(vector_store_id)
+    if g is None or not point_ids:
+        return empty
+    t0 = time.time()
+    nodes: Dict[str, Dict[str, Any]] = {}
+    links: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def add_node(nid: Any, labels: Any, props: Any) -> str:
+        sid = str(nid)
+        if sid not in nodes:
+            label = labels[0] if labels else "Node"
+            props = props or {}
+            nodes[sid] = {"id": sid, "label": label,
+                          "name": _node_name(label, props), "properties": _slim_props(props)}
+        return sid
+
+    def add_link(a: Any, b: Any, t: str) -> None:
+        k = (str(a), str(b), t)
+        if k not in seen:
+            seen.add(k)
+            links.append({"source": str(a), "target": str(b), "type": t})
+
+    try:
+        seed_ids: List[str] = []
+        for nid, labels, props in g.query(
+            "MATCH (c:Chunk) WHERE c.qdrant_point_id IN $p RETURN id(c), labels(c), properties(c)",
+            {"p": point_ids},
+        ).result_set:
+            seed_ids.append(add_node(nid, labels, props))
+        if not seed_ids:
+            return empty
+
+        # Documento di provenienza (collega diretto Document→Chunk, saltando la Section)
+        for cid, did, dl, dp in g.query(
+            "MATCH (c:Chunk) WHERE c.qdrant_point_id IN $p "
+            "MATCH (d:Document {id: c.file_id}) RETURN id(c), id(d), labels(d), properties(d)",
+            {"p": point_ids},
+        ).result_set:
+            add_node(did, dl, dp)
+            add_link(did, cid, "HAS_CHUNK")
+
+        # Entità menzionate dai chunk seed
+        ent_ids: set = set()
+        for cid, eid, el, ep in g.query(
+            "MATCH (c:Chunk) WHERE c.qdrant_point_id IN $p "
+            "MATCH (c)-[:MENTIONS]->(e:Entity) RETURN id(c), id(e), labels(e), properties(e)",
+            {"p": point_ids},
+        ).result_set:
+            add_node(eid, el, ep)
+            add_link(cid, eid, "MENTIONS")
+            ent_ids.add(eid)
+
+        # Relazioni tipizzate tra le entità incluse (mostra il TIPO semantico, es. "emesso da")
+        if include_relations and ent_ids:
+            for a, b, rtype in g.query(
+                "MATCH (e1:Entity)-[r:REL]->(e2:Entity) WHERE id(e1) IN $ids AND id(e2) IN $ids "
+                "RETURN id(e1), id(e2), r.type",
+                {"ids": list(ent_ids)},
+            ).result_set:
+                add_link(a, b, rtype or "REL")
+
+        # Chunk adiacenti via :NEXT (contesto di lettura)
+        if include_next:
+            for cid, aid, al, ap in g.query(
+                "MATCH (c:Chunk) WHERE c.qdrant_point_id IN $p "
+                "MATCH (c)-[:NEXT]-(a:Chunk) RETURN id(c), id(a), labels(a), properties(a)",
+                {"p": point_ids},
+            ).result_set:
+                add_node(aid, al, ap)
+                add_link(cid, aid, "NEXT")
+    except Exception as e:
+        logger.warning(f"subgraph_for_points ({vector_store_id}) failed: {e}")
+
+    return {"nodes": list(nodes.values()), "links": links, "seed_ids": seed_ids,
+            "metadata": {"node_count": len(nodes), "edge_count": len(links),
+                         "query_time_ms": round((time.time() - t0) * 1000, 1)}}

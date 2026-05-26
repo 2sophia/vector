@@ -14,7 +14,7 @@ from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
 from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk
 from utils.qdrant import create_qdrant_collection, delete_qdrant_points
-from utils.falkor import delete_graph, purge_file_graph
+from utils.falkor import delete_graph, purge_file_graph, export_graph
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
 from utils.store_schema import (
     get_effective_schema, get_schema_doc, set_schema, delete_store_schemas,
@@ -61,6 +61,25 @@ router = APIRouter(
 # ================== VECTOR STORE ENDPOINTS ==================
 
 # TODO: WORK
+def _file_counts(vector_store_id: str) -> Dict[str, int]:
+    """Conta i FILE distinti (per file_id) per status dai job di ingestion — NON i
+    chunk/punti Qdrant (che sono molti per file). Status job: PENDING/PROCESSING/
+    COMPLETED/FAILED."""
+    jobs = db["ingestion_jobs"]
+    base = {"vector_store_id": vector_store_id}
+
+    def n(extra: Dict[str, Any]) -> int:
+        return len(jobs.distinct("file_id", {**base, **extra}))
+
+    return {
+        "total": n({}),
+        "completed": n({"status": "COMPLETED"}),
+        "in_progress": n({"status": {"$in": ["PENDING", "PROCESSING"]}}),
+        "failed": n({"status": "FAILED"}),
+        "cancelled": 0,
+    }
+
+
 @router.post("", response_model=VectorStore)
 async def create_vector_store(store_data: VectorStoreCreate):
     """Create a new vector store (Qdrant collection)"""
@@ -154,8 +173,7 @@ async def list_vector_stores(limit: int = Query(20), order: str = Query("desc"),
                 status="completed",
                 usage_bytes=point_count * 1024,
                 created_at=metadata.get("created_at", get_timestamp()),
-                file_counts={"total": point_count, "completed": point_count, "in_progress": 0, "failed": 0,
-                             "cancelled": 0},
+                file_counts=await asyncio.to_thread(_file_counts, collection_name),
                 metadata=metadata.get("metadata", {}),
                 last_active_at=get_timestamp()
             ))
@@ -177,7 +195,6 @@ async def list_vector_stores(limit: int = Query(20), order: str = Query("desc"),
         raise HTTPException(status_code=500, detail=f"Failed to list vector stores: {str(e)}")
 
 
-# TODO: WORK | REVIEW COUNT FILES
 @router.get("/{vector_store_id}", response_model=VectorStore)
 async def get_vector_store(vector_store_id: str):
     """Get a specific vector store"""
@@ -211,7 +228,7 @@ async def get_vector_store(vector_store_id: str):
             status="completed",
             usage_bytes=point_count * 1024,
             created_at=metadata.get("created_at", get_timestamp()),
-            file_counts={"total": point_count, "completed": point_count, "in_progress": 0, "failed": 0, "cancelled": 0},
+            file_counts=await asyncio.to_thread(_file_counts, vector_store_id),
             metadata=metadata.get("metadata", {}),
             last_active_at=get_timestamp()
         )
@@ -249,6 +266,20 @@ def get_curation_stats(vector_store_id: str):
         "boilerplate_min_docs": CURATION_BOILERPLATE_MIN_DOCS,
         **stats,
     }
+
+
+@router.get("/{vector_store_id}/graph")
+async def get_vector_store_graph(
+    vector_store_id: str,
+    limit: int = Query(default=2000, ge=1, le=10000),
+):
+    """Esporta il knowledge graph del vector store come `{nodes, links, metadata}`
+    per la visualizzazione force-graph. `limit` = numero massimo di nodi (gli archi
+    sono tenuti solo tra i nodi esportati). Best-effort: grafo vuoto se FalkorDB è giù."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    data = await asyncio.to_thread(export_graph, vector_store_id, limit)
+    return {"object": "vector_store.graph", "vector_store_id": vector_store_id, **data}
 
 
 @router.get("/{vector_store_id}/schema")

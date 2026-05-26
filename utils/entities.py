@@ -26,10 +26,28 @@ logger = get_logger(__name__)
 # --- GLiNER lazy singleton ---
 _model = None
 _model_failed = False
+_device = "cpu"  # device reale dei pesi, per un empty_cache mirato
+
+# Quante finestre passare a model.inference() per chiamata. Passarle TUTTE insieme
+# (batch illimitato) faceva esplodere la VRAM su GPU: mDeBERTa ha attention O(seq²)
+# e le attivazioni di ~100+ finestre restavano in cache (≈+2GB). 16 tiene il picco
+# basso senza penalizzare il throughput (su CPU è ininfluente).
+_GLINER_INFER_BATCH = 16
+
+
+def _empty_cache() -> None:
+    """Libera la cache CUDA dopo un batch (la VRAM torna a riposo invece di restare
+    al picco di attivazioni). No-op su CPU."""
+    if _device.startswith("cuda"):
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 def _get_model():
-    global _model, _model_failed
+    global _model, _model_failed, _device
     if not GLINER_ENABLED or _model_failed:
         return None
     if _model is not None:
@@ -50,6 +68,7 @@ def _get_model():
             dev = next(_model.model.parameters()).device
         except Exception:
             dev = device
+        _device = str(dev)
         logger.info(f"✅ GLiNER pronto — device={dev} · model={GLINER_MODEL}")
         return _model
     except Exception as e:
@@ -156,7 +175,15 @@ def extract_entities_batch(
                 segments.append(w)
                 owners.append(i)
         try:
-            batch = model.inference(segments, gliner_labels, threshold=GLINER_THRESHOLD)
+            # mini-batch delle finestre: limita il picco di attivazioni su GPU
+            batch: List[List[Dict[str, Any]]] = []
+            for s in range(0, len(segments), _GLINER_INFER_BATCH):
+                batch.extend(
+                    model.inference(
+                        segments[s:s + _GLINER_INFER_BATCH], gliner_labels,
+                        threshold=GLINER_THRESHOLD,
+                    )
+                )
             for seg_i, ents in enumerate(batch):
                 owner = owners[seg_i]
                 for e in ents:
@@ -172,6 +199,8 @@ def extract_entities_batch(
                     })
         except Exception as e:
             logger.warning(f"GLiNER inference failed: {e}")
+        finally:
+            _empty_cache()  # rilascia la cache CUDA del picco di attivazioni
 
     # Regex (structured entities) sul testo intero (nessun limite di lunghezza)
     for i, text in enumerate(texts):

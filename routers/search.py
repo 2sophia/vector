@@ -15,7 +15,7 @@ from utils import (
 
 from utils.qdrant import qdrant_hybrid_batch_search, qdrant_lexical_search
 from utils.embeddings import get_bge_reranking_docs
-from utils.falkor import expand_neighbors
+from utils.falkor import expand_neighbors, subgraph_for_points
 from utils.fusion import rrf_fuse
 
 from utils.schemas import VectorSearch, SearchResponse
@@ -342,3 +342,21 @@ def search_vector_store(vector_store_id: str, search_data: VectorSearch):
         logger.error(f"Search error: {str(e)}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@router.post("/{vector_store_id}/search/graph")
+def search_vector_store_as_graph(vector_store_id: str, search_data: VectorSearch):
+    """Search-as-graph: esegue la ricerca e **ricostruisce il sottografo** dei chunk
+    risultato — documento di provenienza + entità menzionate + relazioni tipizzate
+    tra esse. Ritorna i risultati normali (`data`) + `graph` ({nodes, links, seed_ids})
+    per la visualizzazione force-graph, dove i `seed_ids` sono i chunk effettivamente
+    trovati dalla ricerca."""
+    res = search_vector_store(vector_store_id, search_data)
+    point_ids = [r["id"] for r in res.get("data", []) if r.get("id")]
+    graph = subgraph_for_points(vector_store_id, point_ids)
+    return {
+        "object": "vector_store.search_graph",
+        "query": res.get("query"),
+        "data": res.get("data", []),
+        "graph": graph,
+    }

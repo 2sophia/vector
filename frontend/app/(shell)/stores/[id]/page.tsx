@@ -11,6 +11,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Share2,
   Trash2,
   X,
 } from "lucide-react";
@@ -155,6 +156,12 @@ export default function VectorStoreDetailPage() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Link href={`/stores/${vectorStoreId}/graph`}>
+              <Button variant="outline" size="sm">
+                <Share2 className="size-4" />
+                Grafo
+              </Button>
+            </Link>
             <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
               <RefreshCw className={cn("size-4", loading && "animate-spin")} />
               Refresh
