@@ -6,9 +6,11 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   Database,
   FolderTree,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Share2,
@@ -49,6 +51,23 @@ export default function VectorStoreDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSchema, setShowSchema] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+
+  async function saveName() {
+    const n = nameDraft.trim();
+    if (!n || n === storeName) {
+      setEditingName(false);
+      return;
+    }
+    try {
+      await api.patch(`/vector_stores/${vectorStoreId}`, { name: n });
+      setStoreName(n);
+      setEditingName(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   // form
   const [name, setName] = useState("");
@@ -150,8 +169,42 @@ export default function VectorStoreDetailPage() {
         <div className="flex items-end justify-between gap-4">
           <div className="flex flex-col gap-1.5">
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <Database className="size-6 text-indigo-500" />
-              {storeName || "…"}
+              <Database className="size-6 shrink-0 text-indigo-500" />
+              {editingName ? (
+                <span className="flex items-center gap-1.5">
+                  <Input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveName();
+                      else if (e.key === "Escape") setEditingName(false);
+                    }}
+                    className="h-9 w-64 text-xl"
+                  />
+                  <Button size="icon" variant="ghost" onClick={saveName} aria-label="Salva nome">
+                    <Check className="size-4 text-emerald-600" />
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => setEditingName(false)} aria-label="Annulla">
+                    <X className="size-4 text-zinc-500" />
+                  </Button>
+                </span>
+              ) : (
+                <>
+                  {storeName || "…"}
+                  <button
+                    onClick={() => {
+                      setNameDraft(storeName);
+                      setEditingName(true);
+                    }}
+                    className="text-zinc-300 transition-colors hover:text-indigo-600 dark:text-zinc-600"
+                    aria-label="Rinomina vector store"
+                    title="Rinomina"
+                  >
+                    <Pencil className="size-4" />
+                  </button>
+                </>
+              )}
             </h1>
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               Le directory di questo vector store. I file caricati in una directory
@@ -185,7 +238,7 @@ export default function VectorStoreDetailPage() {
             </Button>
             <Button size="sm" onClick={openDialog}>
               <Plus className="size-4" />
-              Nuova directory
+              Nuova
             </Button>
           </div>
         </div>

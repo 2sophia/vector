@@ -35,6 +35,7 @@ from utils import (
 
 from utils.schemas import (
     VectorStoreCreate,
+    VectorStoreUpdate,
     FileAttach,
     VectorStore,
     VectorStoreFile,
@@ -243,6 +244,52 @@ async def get_vector_store(vector_store_id: str):
         logger.error(f"Error in: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to get vector store: {str(e)}")
+
+
+@router.patch("/{vector_store_id}", response_model=VectorStore)
+async def update_vector_store(vector_store_id: str, body: VectorStoreUpdate):
+    """Aggiorna i metadati di un vector store (rinomina / metadata). Il nome vive nel
+    sidecar JSON `{id}_metadata.json` (Qdrant non tiene i metadati di collection)."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in (await asyncio.to_thread(qdrant_client.get_collections)).collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    metadata_path = os.path.join(FILES_STORAGE, f"{vector_store_id}_metadata.json")
+    try:
+        async with aiofiles.open(metadata_path, "r") as f:
+            meta = json.loads(await f.read())
+    except Exception:
+        meta = {"name": vector_store_id, "created_at": get_timestamp(), "metadata": {}}
+
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Name cannot be empty")
+        meta["name"] = name
+    if body.metadata is not None:
+        meta["metadata"] = body.metadata
+
+    async with aiofiles.open(metadata_path, "w") as f:
+        await f.write(json.dumps(meta))
+
+    point_count = 0
+    try:
+        info = await asyncio.to_thread(qdrant_client.get_collection, vector_store_id)
+        point_count = info.points_count or 0
+    except Exception:
+        pass
+    return VectorStore(
+        id=vector_store_id,
+        name=meta.get("name", vector_store_id),
+        status="completed",
+        usage_bytes=point_count * 1024,
+        created_at=meta.get("created_at", get_timestamp()),
+        file_counts=await asyncio.to_thread(_file_counts, vector_store_id),
+        metadata=meta.get("metadata", {}),
+        last_active_at=get_timestamp(),
+    )
 
 
 @router.get("/{vector_store_id}/curation")
