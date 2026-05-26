@@ -35,8 +35,14 @@ chunks and offers **graph-augmented retrieval**. Backend and frontend ship in th
 - **Graph-augmented retrieval** — Qdrant finds the chunks, the graph expands the neighbourhood
   (chunks sharing entities + adjacent chunks), then a unified rerank. Entity expansion is
   IDF-weighted so common "stopword-entities" don't dominate
-- **Content curation** — near-duplicate chunks shared across many documents (headers/footers,
-  boilerplate) are detected by content hash and suppressed at search time
+- **Content curation + semantic dedup** — exact boilerplate (same text across many documents:
+  headers/footers, disclaimers) is detected by content hash and suppressed at search time;
+  **near-duplicates** ("same thing, different words") are found by **dense ∩ sparse agreement**
+  and *marked* (kept, not deleted), keeping one representative per cluster — the dense-vs-sparse
+  *mismatch* deliberately preserves rare variants (compliance-safe)
+- **Optimize — no-reingest maintenance** — a per-store dashboard (and `POST .../optimize`) that
+  prunes the knowledge graph (low-confidence mentions + junk entities) and runs semantic dedup
+  on what's already indexed: **dry-run first**, then apply, fully reversible — no re-ingestion
 - **Per-model device** — place GLiNER/relex and Whisper independently on CPU or a specific GPU
   (`SOPHIA_VECTOR_GLINER_DEVICE` / `ASR_DEVICE`), with graceful CPU fallback
 - **Multi-source ingestion** — provider abstraction (SharePoint enabled; Google Drive/Workspace/S3
@@ -209,6 +215,8 @@ GET|DELETE /v1/vector_stores/{id}/files            # list / attach / remove file
 POST /v1/vector_stores/{id}/search                 # multi-channel + graph-augmented search
 GET|PUT /v1/vector_stores/{id}/schema              # extraction schema (store scope)
 GET /v1/vector_stores/{id}/curation                # content-curation stats
+POST /v1/vector_stores/{id}/optimize               # no-reingest maintenance (graph prune + semantic dedup)
+GET /v1/vector_stores/{id}/graph                   # export knowledge graph (force-graph viewer)
 
 # Files
 POST|GET /v1/files    GET|DELETE /v1/files/{id}    GET /v1/files/{id}/content
@@ -253,7 +261,8 @@ One FalkorDB graph per vector store (same name as the Qdrant collection). Nodes:
 for reading order, and `:Chunk -[:MENTIONS]-> :Entity` (entities shared across documents via
 `MERGE` → cross-document resolution). With relation extraction enabled, entities are also linked by
 **typed** `:REL {type,score}` edges (GLiNER-relex, e.g. `DECRETO —emesso da→ PRESIDENTE DELLA REPUBBLICA`).
-Inspect it from the FalkorDB UI or via Cypher, e.g.:
+Explore it from the built-in **force-graph viewer** (`/stores/{id}/graph`, 2D/3D), the FalkorDB UI,
+or via Cypher, e.g.:
 
 ```cypher
 MATCH (d:Document)-[:HAS_CHUNK|HAS_SECTION*]->(:Chunk)-[:MENTIONS]->(e:Entity)
