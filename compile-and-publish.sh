@@ -11,7 +11,7 @@
 #                     (richiede host con GPU + nvidia-container-toolkit a runtime)
 set -euo pipefail
 
-VERSION="${1:-0.3.0-alpha}"
+VERSION="${1:-0.4.0-alpha}"
 FLAVOR="${2:-cpu}"
 
 case "$FLAVOR" in

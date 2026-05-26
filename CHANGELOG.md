@@ -4,6 +4,48 @@ All notable changes to Sophia Vector are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/); the project follows
 semantic versioning (currently in the `alpha` pre-release line).
 
+## [0.4.0-alpha] — 2026-05-26
+
+A large quality + product pass. The heavy ML layers become **opt-in** so the default install is
+light and predictable, while the knowledge graph stays on out-of-the-box (populated by
+high-precision regex). Retrieval, entity extraction and the maintenance tooling all get sharper,
+and a zero-shot classifier is wired in for faceting.
+
+### Added
+- **High-precision regex extraction** (`models/ner.py`): universal patterns (email, URL,
+  IBAN/ISIN, amounts, percentages, dates) plus Italian legal references (D.Lgs/D.M., Legge,
+  Regolamento UE incl. delegato/di esecuzione, Direttiva, Decisione UE/PESC, Delibera,
+  Provvedimento, Circolare, EBA/GL codes, GDPR/TUB/TUF article refs). Variants collapse onto the
+  same graph node. The graph is now meaningful **without** the heavy zero-shot model.
+- **Zero-shot chunk classification** (`models/classifier.py`, GliClass, opt-in): tags chunks by
+  theme/sensitivity → `payload.category` for faceting/filtering. `pip install gliclass` to enable.
+- **Optimize — no-reingest maintenance** (`POST /v1/vector_stores/{id}/optimize` + per-store UI):
+  graph prune (low-confidence mentions + junk entities) and **semantic dedup** of near-duplicates
+  via dense∩sparse agreement (marked, not deleted; fully reversible). Dry-run first.
+- **Knowledge-graph viewer** (`/stores/{id}/graph`, force-graph 2D/3D) plus `GET …/graph` export.
+- **Rename vector store** (`PATCH /v1/vector_stores/{id}`) and **rename directory**, inline from
+  the UI. A shadcn/radix `Select`, a collapsible extraction panel, and an "add current folder"
+  action in the source browser.
+- **Rich startup banner** (`utils/banner.py`): services + ingestion models (NER / relations /
+  classifier / ASR) with device and on/off state.
+
+### Changed
+- **Default posture: heavy ML is opt-in.** Zero-shot NER (GLiNER), typed relations and the
+  classifier are **off by default**; `GRAPH_ENABLED` stays **on**, populated by regex (light, no
+  model download). The dense+sparse+rerank core is always on; dev enables everything via `.env`.
+- **GLiNER model → `gliner-community/gliner_medium-v2.5`** (Apache-2.0, was CC-BY-NC). Default
+  entity labels tuned for the banking/legal domain (`autorità di vigilanza`, `organo aziendale`,
+  …); classifier labels by **theme**, not document type (overlapping doc-types don't discriminate).
+- **Rerank score threshold 0.22 → 0.1.** The absolute cross-encoder cutoff was zeroing legitimate
+  paraphrase/cross-lingual queries (good dense match, low rerank score); 0.1 recovers them while
+  still dropping noise — in-corpus ranking is unchanged.
+- **Docling memory mitigation** (`SOPHIA_VECTOR_DOCLING_CLEAR_EVERY`, default 20): the ingestion
+  worker clears the parser caches every N docs and at end of batch.
+- Blocking calls inside `async def` endpoints moved off the event loop (`asyncio.to_thread`).
+
+### Fixed
+- **Optimize "Reset marcatura"** no longer runs the destructive graph cleanup as a side effect.
+
 ## [0.3.0-alpha] — 2026-05-25
 
 Retrieval and the knowledge graph get a substantial quality pass: search now fuses multiple

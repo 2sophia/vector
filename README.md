@@ -4,6 +4,10 @@
   <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/hero.png" alt="Sophia Vector — vector + graph, un retrieval solo" width="100%">
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/demo.gif" alt="Sophia Vector — demo (stores, ingestion, search, knowledge graph)" width="100%">
+</p>
+
 OpenAI SDK Compatible Vector Store with Qdrant backend, a FalkorDB **knowledge graph**,
 and a management frontend.
 
@@ -152,7 +156,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 ./compile-and-publish.sh [version]            # CPU image, multi-arch (amd64 + arm64) + push
 ./compile-and-publish.sh [version] cu130      # GPU image (torch cu130), amd64 → :<version>-cu130
 # or directly:
-docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.3.0-alpha --push .
+docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.4.0-alpha --push .
 ```
 
 On the prod host, copy `.env.prod` → `.env` (only secrets + `NEXTAUTH_URL`; service URLs are
@@ -169,7 +173,7 @@ which is fine for moderate volumes. To run them on a GPU, build the **GPU flavor
 (`Dockerfile.cu130`, torch cu130 / CUDA 13.0, ~2 GB larger):
 
 ```bash
-./compile-and-publish.sh 0.3.0-alpha cu130    # → sophiacloud/vector:0.3.0-alpha-cu130
+./compile-and-publish.sh 0.4.0-alpha cu130    # → sophiacloud/vector:0.4.0-alpha-cu130
 ```
 
 Then point the compose service at the `-cu130` image, give it the GPU (host needs the NVIDIA driver
@@ -177,7 +181,7 @@ Then point the compose service at the `-cu130` image, give it the GPU (host need
 
 ```yaml
 # docker-compose.yml (sophia-vector service)
-image: sophiacloud/vector:0.3.0-alpha-cu130
+image: sophiacloud/vector:0.4.0-alpha-cu130
 deploy:
   resources:
     reservations:
@@ -222,7 +226,7 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_RELATIONS_ENABLED`     | `false`                                | Typed relation extraction (GLiNER-relex) |
 | `SOPHIA_VECTOR_RELATIONS_LABELS`      | `pubblicato da,emesso da,…`            | Relation labels (CSV, zero-shot default) |
 | `SOPHIA_VECTOR_CLASSIFIER_ENABLED`    | `false`                                | Zero-shot chunk classification (GliClass; opt-in, needs `pip install gliclass`) |
-| `SOPHIA_VECTOR_CLASSIFIER_LABELS`     | `policy,procedura,circolare,…`         | Classification labels (CSV, zero-shot)   |
+| `SOPHIA_VECTOR_CLASSIFIER_LABELS`     | `antiriciclaggio,privacy e protezione dati,…` | Classification labels (CSV, zero-shot; by theme) |
 | `SOPHIA_VECTOR_CURATION_ENABLED`      | `true`                                 | Boilerplate detection + suppression      |
 | `SOPHIA_VECTOR_INTERNAL_API_URL`      | `http://127.0.0.1:8100`                | Scheduler → backend (internal)           |
 
@@ -230,7 +234,7 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 
 ```bash
 # Vector stores
-POST|GET /v1/vector_stores              GET|DELETE /v1/vector_stores/{id}
+POST|GET /v1/vector_stores              GET|PATCH|DELETE /v1/vector_stores/{id}   # PATCH = rename
 GET|DELETE /v1/vector_stores/{id}/files            # list / attach / remove files
 POST /v1/vector_stores/{id}/search                 # multi-channel + graph-augmented search
 GET|PUT /v1/vector_stores/{id}/schema              # extraction schema (store scope)
@@ -301,12 +305,18 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 ## API Documentation
 
+Interactive API reference (Scalar) — full `/v1/*` surface, try-it-out, MCP export:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — API reference (Scalar)" width="100%">
+</p>
+
 - API reference (Scalar): `http://localhost:8100/docs`
 - Raw OpenAPI schema: `http://localhost:8100/openapi.json`
 
 ## Version
 
-Current version: **0.3.0-alpha**
+Current version: **0.4.0-alpha**
 
 ## License
 
