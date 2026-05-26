@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Share2,
+  Sparkles,
   Trash2,
   Wand2,
   X,
@@ -47,6 +48,7 @@ export default function VectorStoreDetailPage() {
   const [creating, setCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSchema, setShowSchema] = useState(false);
 
   // form
   const [name, setName] = useState("");
@@ -157,6 +159,14 @@ export default function VectorStoreDetailPage() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant={showSchema ? "default" : "outline"}
+              size="sm"
+              onClick={() => setShowSchema((v) => !v)}
+            >
+              <Sparkles className="size-4" />
+              Estrazione
+            </Button>
             <Link href={`/stores/${vectorStoreId}/graph`}>
               <Button variant="outline" size="sm">
                 <Share2 className="size-4" />
@@ -186,8 +196,10 @@ export default function VectorStoreDetailPage() {
           </div>
         )}
 
-        {/* Estrazione a livello store (default per tutte le directory) */}
-        <SchemaEditor basePath={`/vector_stores/${vectorStoreId}`} levelLabel="store" />
+        {/* Estrazione a livello store (default per tutte le directory) — apribile dalla toolbar */}
+        {showSchema && (
+          <SchemaEditor basePath={`/vector_stores/${vectorStoreId}`} levelLabel="store" />
+        )}
 
         {dirs.length === 0 ? (
           <Card>

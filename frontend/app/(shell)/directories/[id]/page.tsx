@@ -286,6 +286,7 @@ export default function DirectoryDetailPage() {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showSchema, setShowSchema] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Import da sorgente
@@ -581,10 +582,20 @@ export default function DirectoryDetailPage() {
               ))}
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || !dir}>
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant={showSchema ? "default" : "outline"}
+              size="sm"
+              onClick={() => setShowSchema((v) => !v)}
+            >
+              <Sparkles className="size-4" />
+              Estrazione
+            </Button>
+            <Button variant="outline" size="sm" onClick={refresh} disabled={loading || !dir}>
+              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -598,8 +609,10 @@ export default function DirectoryDetailPage() {
           </div>
         )}
 
-        {/* Estrazione (schema entità/relazioni a livello directory) */}
-        <SchemaEditor basePath={`/directories/${directoryId}`} levelLabel="directory" canReset />
+        {/* Estrazione (schema entità/relazioni a livello directory) — apribile dalla toolbar */}
+        {showSchema && (
+          <SchemaEditor basePath={`/directories/${directoryId}`} levelLabel="directory" canReset />
+        )}
 
         {/* Upload manuale */}
         <Card>

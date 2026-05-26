@@ -118,6 +118,13 @@ export function SourceBrowser({ sourceId, selectedIds, onAdd, onClose }: Props) 
   const visibleFolders = folders.filter((f) => f.name.toLowerCase().includes(ql));
   const visibleFiles = files.filter((f) => f.name.toLowerCase().includes(ql));
 
+  // Cartella in cui sei ENTRATO (ultimo crumb con folderId): permette di aggiungere
+  // direttamente "questa cartella" senza tornare alla lista del livello superiore.
+  const last = crumbs[crumbs.length - 1];
+  const currentFolder =
+    !isDrives && last && last.folderId ? { id: last.folderId, name: last.label } : null;
+  const currentAdded = currentFolder ? selected.has(currentFolder.id) : false;
+
   return (
     <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
       {/* breadcrumb */}
@@ -142,6 +149,25 @@ export function SourceBrowser({ sourceId, selectedIds, onAdd, onClose }: Props) 
 
       {/* hint + ricerca */}
       <div className="flex flex-col gap-1.5 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        {/* aggiungi la cartella CORRENTE (quella in cui sei entrato) */}
+        {currentFolder && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+              Sei in <span className="font-medium text-zinc-700 dark:text-zinc-300">{currentFolder.name}</span>
+            </span>
+            {currentAdded ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                <Check className="size-3" />
+                Aggiunta
+              </span>
+            ) : (
+              <Button size="sm" className="shrink-0" onClick={() => onAdd(currentFolder)}>
+                <Plus className="size-4" />
+                Aggiungi questa cartella
+              </Button>
+            )}
+          </div>
+        )}
         <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
           {isDrives
             ? "Scegli una libreria, poi entra nelle cartelle e aggiungile alla sync."
