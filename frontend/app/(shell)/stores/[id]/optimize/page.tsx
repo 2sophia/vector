@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Wand2, Eye, Play, Loader2, Trash2, FileText, Layers } from "lucide-react";
+import { ArrowLeft, Wand2, Eye, Play, Loader2, Trash2, FileText, Layers, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,8 @@ type RedundancyStats = {
   reduction_pct?: number;
   variants_preserved?: number;
   dense_threshold?: number;
+  marked?: number;
+  reset?: boolean;
 };
 type OptimizeResult = {
   dry_run: boolean;
@@ -56,22 +58,26 @@ export default function OptimizePage() {
   const [minLen, setMinLen] = useState(3);
   const [dropNumeric, setDropNumeric] = useState(true);
   const [denseThreshold, setDenseThreshold] = useState(0.96);
+  const [markRedundant, setMarkRedundant] = useState(false);
 
-  const [busy, setBusy] = useState<false | "preview" | "apply">(false);
+  const [busy, setBusy] = useState<false | "preview" | "apply" | "reset">(false);
   const [result, setResult] = useState<OptimizeResult | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const run = useCallback(
-    async (dryRun: boolean) => {
-      setBusy(dryRun ? "preview" : "apply");
+    async (dryRun: boolean, reset = false) => {
+      setBusy(reset ? "reset" : dryRun ? "preview" : "apply");
       setError(null);
+      const applyRed = markRedundant && !dryRun && !reset;
       const qs =
         `min_score=${minScore}&min_entity_len=${minLen}` +
-        `&drop_numeric=${dropNumeric}&dense_threshold=${denseThreshold}&dry_run=${dryRun}`;
+        `&drop_numeric=${dropNumeric}&dense_threshold=${denseThreshold}` +
+        `&apply_redundancy=${applyRed}&reset_redundancy=${reset}&dry_run=${dryRun}`;
       const flags =
         `--min-score ${minScore} --min-entity-len ${minLen}` +
         `${dropNumeric ? " --drop-numeric" : ""} --sim ${denseThreshold}` +
+        `${applyRed ? " --mark-redundant" : ""}${reset ? " --reset-redundant" : ""}` +
         `${dryRun ? " --dry-run" : ""}`;
       try {
         const r = await api.post<OptimizeResult>(`/vector_stores/${vsid}/optimize?${qs}`);
@@ -104,6 +110,9 @@ export default function OptimizePage() {
           );
           if (rd.variants_preserved)
             lines.push(`→ varianti preservate (solo-dense): ${rd.variants_preserved}`);
+          if (rd.marked)
+            lines.push(`✓ marcati ${rd.marked} ridondanti (soppressi a search-time)`);
+          if (rd.reset) lines.push("✓ marcatura ridondanti azzerata");
         }
         setLog((prev) => [...prev, ...lines, ""]);
       } catch (e) {
@@ -113,7 +122,7 @@ export default function OptimizePage() {
         setBusy(false);
       }
     },
-    [vsid, minScore, minLen, dropNumeric, denseThreshold],
+    [vsid, minScore, minLen, dropNumeric, denseThreshold, markRedundant],
   );
 
   const g = result?.graph;
@@ -236,6 +245,24 @@ export default function OptimizePage() {
                 quasi-identici.
               </p>
             </div>
+
+            {/* marca ridondanti all'applica */}
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-1">
+                <Label>Marca i near-duplicate all&apos;applica</Label>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Off = solo conteggio. On = i ridondanti vengono soppressi a search-time
+                  (resta il rappresentante). Reversibile col reset.
+                </p>
+              </div>
+              <Button
+                variant={markRedundant ? "default" : "outline"}
+                size="sm"
+                onClick={() => setMarkRedundant((v) => !v)}
+              >
+                {markRedundant ? "Attivo" : "Disattivo"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -256,6 +283,20 @@ export default function OptimizePage() {
               <Play className="size-4" />
             )}
             Applica ottimizzazione
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => run(false, true)}
+            disabled={!!busy}
+            className="ml-auto"
+            title="Rimuove la marcatura dei ridondanti (i chunk tornano nei risultati)"
+          >
+            {busy === "reset" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RotateCcw className="size-4" />
+            )}
+            Reset marcatura
           </Button>
         </div>
 

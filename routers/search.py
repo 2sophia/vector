@@ -232,6 +232,19 @@ def _suppress_boilerplate(vector_store_id, rows):
     return kept or rows
 
 
+def _suppress_redundant(rows):
+    """Toglie dai risultati i chunk marcati `_redundant` dall'optimize (near-duplicate
+    dense∩sparse): resta il rappresentante del cluster. La marcatura è esplicita
+    (l'utente l'ha applicata) e reversibile. Failsafe: non svuota i risultati."""
+    if not rows:
+        return rows
+    kept = [r for r in rows if not (r.get("payload") or {}).get("_redundant")]
+    removed = len(rows) - len(kept)
+    if removed:
+        logger.info(f"[redundancy] soppressi {removed} chunk near-duplicate")
+    return kept or rows
+
+
 # ================== VECTOR SEARCH ENDPOINT ==================
 
 @router.post("/{vector_store_id}/search", response_model=SearchResponse)
@@ -288,6 +301,8 @@ def search_vector_store(vector_store_id: str, search_data: VectorSearch):
 
         # ========== Data curation: sopprimi il boilerplate dai risultati ==========
         result_rows = _suppress_boilerplate(vector_store_id, result_rows)
+        # ========== Dedup semantico: sopprimi i near-duplicate marcati ==========
+        result_rows = _suppress_redundant(result_rows)
 
         # ========== STEP 9: BUILD RESPONSE ==========
         search_results = []

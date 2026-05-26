@@ -13,7 +13,10 @@ from fastapi import HTTPException, Query, APIRouter
 from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
 from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk
-from utils.qdrant import create_qdrant_collection, delete_qdrant_points, find_redundant_clusters
+from utils.qdrant import (
+    create_qdrant_collection, delete_qdrant_points,
+    find_redundant_clusters, mark_redundant, unmark_redundant,
+)
 from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
 from utils.store_schema import (
@@ -276,6 +279,8 @@ def optimize_vector_store(
     drop_numeric: bool = Query(default=True),
     dense_threshold: float = Query(default=0.96, ge=0.5, le=1.0),
     include_redundancy: bool = Query(default=True),
+    apply_redundancy: bool = Query(default=False),
+    reset_redundancy: bool = Query(default=False),
     dry_run: bool = Query(default=False),
 ):
     """Ottimizza il vector store SENZA re-ingest, on-demand e idempotente.
@@ -298,12 +303,20 @@ def optimize_vector_store(
     curation = curation_stats(
         vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS
     )
-    # Ridondanza semantica (near-duplicate dense∩sparse). Sola DETECTION per ora:
-    # riporta i numeri, non marca né cancella (marca/rimuovi = step successivi).
-    redundancy = (
-        find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
-        if include_redundancy else None
-    )
+    # Ridondanza semantica (near-duplicate dense∩sparse).
+    #  - dry_run o nessuna azione → solo detection (numeri)
+    #  - apply_redundancy → marca i ridondanti (soppressi a search-time, reversibile)
+    #  - reset_redundancy → rimuove la marcatura
+    redundancy = None
+    if include_redundancy:
+        if not dry_run and reset_redundancy:
+            unmark_redundant(vector_store_id)
+            redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
+            redundancy["reset"] = True
+        elif not dry_run and apply_redundancy:
+            redundancy = mark_redundant(vector_store_id, dense_threshold=dense_threshold)
+        else:
+            redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
     return {
         "object": "vector_store.optimize",
         "vector_store_id": vector_store_id,

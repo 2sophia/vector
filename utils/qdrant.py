@@ -612,23 +612,21 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
 # Redundancy analysis — near-duplicate via concordanza dense ∩ sparse
 # ---------------------------------------------------------------------------
 
-def find_redundant_clusters(
+def _cluster_redundant(
     collection_name: str,
     dense_threshold: float = 0.96,
     neighbor_topk: int = 20,
     max_points: "int | None" = None,
-) -> Dict[str, Any]:
-    """Raggruppa i chunk near-duplicate in cluster (connected components).
+):
+    """Core del dedup semantico (connected components su concordanza dense ∩ sparse).
 
     Un near-dup è CONFERMATO solo se due chunk sono simili sopra `dense_threshold`
     (stesso significato) E ciascuno è tra i top-K vicini sparse dell'altro (stesse
-    parole) → **concordanza dense ∩ sparse = duplicato sicuro**. Il caso "solo dense"
-    (significato simile ma parole diverse) è una possibile parafrasi/variante e NON
-    viene unito: è il guard-rail anti-cancellazione (in compliance la variante rara
-    va preservata). Riusa i vettori già in Qdrant: nessun costo di inferenza.
-
-    SOLA LETTURA: non marca né cancella, ritorna solo le statistiche. I vettori
-    sono interrogati per id (query=point_id usa il vettore memorizzato)."""
+    parole) → duplicato sicuro. Il caso "solo dense" (significato simile, parole
+    diverse) è una possibile parafrasi/variante e NON viene unito: guard-rail
+    anti-cancellazione (in compliance la variante rara va preservata). Riusa i
+    vettori già in Qdrant (zero inferenza). Ritorna (point_ids, clusters, variants):
+    `clusters` = liste ordinate di point_id (≥2), il primo è il rappresentante."""
     from collections import defaultdict
 
     point_ids: List[Any] = []
@@ -677,7 +675,7 @@ def find_redundant_clusters(
                 limit=neighbor_topk, with_payload=False,
             ).points
         except Exception:
-            s = set()
+            s = []
         sparse_nb = {p.id for p in s if p.id != pid}
         concordant = dense_nb & sparse_nb
         variants_preserved += len(dense_nb - sparse_nb)
@@ -687,7 +685,11 @@ def find_redundant_clusters(
     clusters_map = defaultdict(list)
     for pid in point_ids:
         clusters_map[_find(pid)].append(pid)
-    clusters = [m for m in clusters_map.values() if len(m) >= 2]
+    clusters = [sorted(m, key=str) for m in clusters_map.values() if len(m) >= 2]
+    return point_ids, clusters, variants_preserved
+
+
+def _redundant_stats(point_ids, clusters, variants_preserved, dense_threshold, neighbor_topk):
     redundant = sum(len(m) - 1 for m in clusters)  # tieni 1 rappresentante per cluster
     n = len(point_ids)
     return {
@@ -701,3 +703,57 @@ def find_redundant_clusters(
         "neighbor_topk": neighbor_topk,
         "top_cluster_sizes": sorted((len(m) for m in clusters), reverse=True)[:8],
     }
+
+
+def find_redundant_clusters(
+    collection_name: str,
+    dense_threshold: float = 0.96,
+    neighbor_topk: int = 20,
+    max_points: "int | None" = None,
+) -> Dict[str, Any]:
+    """SOLA LETTURA: statistiche dei cluster near-duplicate (non marca né cancella)."""
+    pids, clusters, variants = _cluster_redundant(
+        collection_name, dense_threshold, neighbor_topk, max_points
+    )
+    return _redundant_stats(pids, clusters, variants, dense_threshold, neighbor_topk)
+
+
+def mark_redundant(
+    collection_name: str,
+    dense_threshold: float = 0.96,
+    neighbor_topk: int = 20,
+) -> Dict[str, Any]:
+    """Marca i chunk ridondanti in Qdrant (`payload._redundant = True`), tenendo un
+    rappresentante per cluster. NON cancella: a search-time i marcati vengono
+    soppressi (resta il rappresentante), ed è reversibile con `unmark_redundant`."""
+    pids, clusters, variants = _cluster_redundant(collection_name, dense_threshold, neighbor_topk)
+    redundant_ids: List[Any] = []
+    for members in clusters:
+        redundant_ids.extend(members[1:])  # members[0] = rappresentante, resta
+    if redundant_ids:
+        qdrant_client.set_payload(
+            collection_name=collection_name,
+            payload={"_redundant": True},
+            points=redundant_ids,
+            wait=True,
+        )
+    stats = _redundant_stats(pids, clusters, variants, dense_threshold, neighbor_topk)
+    stats["marked"] = len(redundant_ids)
+    return stats
+
+
+def unmark_redundant(collection_name: str) -> Dict[str, Any]:
+    """Rimuove la marcatura `_redundant` da tutti i punti (reset, reversibilità)."""
+    try:
+        qdrant_client.delete_payload(
+            collection_name=collection_name,
+            keys=["_redundant"],
+            points=models.Filter(must=[
+                models.FieldCondition(key="_redundant", match=models.MatchValue(value=True))
+            ]),
+            wait=True,
+        )
+        return {"unmarked": True}
+    except Exception as e:
+        logger.warning(f"unmark_redundant({collection_name}) failed: {e}")
+        return {"unmarked": False, "error": str(e)}
