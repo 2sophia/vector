@@ -23,6 +23,7 @@ del grafo non rompe mai l'ingestion Qdrant (che resta la pipeline primaria).
 Le funzioni sono sincrone: chiamarle via `asyncio.to_thread` dal worker.
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
@@ -118,6 +119,72 @@ def delete_graph(vector_store_id: str) -> None:
         g.delete()
     except Exception as e:
         logger.warning(f"delete_graph({vector_store_id}) failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Optimize: pulizia post-hoc del grafo (NO re-ingest)
+# ---------------------------------------------------------------------------
+
+# Entità "spazzatura": solo cifre/punteggiatura (numerazioni tipo "1.6.1.12.3",
+# "12", "3.4"). Filtro AGNOSTICO. FalkorDB non supporta `=~` → si applica in Python.
+_NUMERICISH_RE = re.compile(r"^[0-9.,;:()\-/ ]+$")
+
+
+def _is_junk_entity(name: str, min_len: int) -> bool:
+    n = (name or "").strip()
+    return len(n) < min_len or bool(_NUMERICISH_RE.match(n))
+
+
+def optimize_graph(
+    vector_store_id: str,
+    min_score: float = 0.6,
+    min_entity_len: int = 3,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Ripulisce il grafo entità SENZA re-ingest, lavorando su ciò che c'è:
+      - rimuove le menzioni (:Chunk)-[:MENTIONS]->(:Entity) con score < `min_score`
+        (lo score di estrazione è salvato sull'arco → ri-filtrabile a posteriori);
+      - rimuove le entità "spazzatura" (nome < `min_entity_len` char, oppure fatto
+        solo di cifre/punteggiatura → numerazioni tipo "1.6.1.12.3");
+      - rimuove le :Entity rimaste orfane (senza MENTIONS né REL) e i :Content orfani.
+    Filtri AGNOSTICI (non dipendono dal dominio). `dry_run` conta soltanto.
+    Best-effort: ritorna le statistiche (o {"enabled": False} se il grafo è off)."""
+    g = _graph(vector_store_id)
+    if g is None:
+        return {"enabled": False}
+
+    def _cnt(q, params=None):
+        res = g.query(q, params or {})
+        return res.result_set[0][0] if res.result_set else 0
+
+    # Le entità le filtro in Python (FalkorDB non ha regex): leggo (id, name).
+    ent_rows = g.query("MATCH (e:Entity) RETURN e.id, e.name").result_set or []
+    junk_ids = [row[0] for row in ent_rows if _is_junk_entity(row[1], min_entity_len)]
+
+    out: Dict[str, Any] = {
+        "enabled": True,
+        "min_score": min_score,
+        "min_entity_len": min_entity_len,
+        "entities_before": len(ent_rows),
+        "mentions_before": _cnt("MATCH ()-[r:MENTIONS]->() RETURN count(r)"),
+        "weak_mentions": _cnt("MATCH ()-[r:MENTIONS]->() WHERE r.score < $s RETURN count(r)", {"s": min_score}),
+        "junk_entities": len(junk_ids),
+    }
+    if dry_run:
+        out["dry_run"] = True
+        return out
+
+    g.query("MATCH ()-[r:MENTIONS]->() WHERE r.score < $s DELETE r", {"s": min_score})
+    if junk_ids:
+        g.query("MATCH (e:Entity) WHERE e.id IN $ids DETACH DELETE e", {"ids": junk_ids})
+    g.query("MATCH (e:Entity) WHERE NOT (e)<-[:MENTIONS]-() AND NOT (e)-[:REL]-() DELETE e")
+    g.query("MATCH (ct:Content) WHERE NOT (ct)<-[:SAME_CONTENT]-() DELETE ct")
+
+    out["entities_after"] = _cnt("MATCH (e:Entity) RETURN count(e)")
+    out["mentions_after"] = _cnt("MATCH ()-[r:MENTIONS]->() RETURN count(r)")
+    out["entities_removed"] = out["entities_before"] - out["entities_after"]
+    out["mentions_removed"] = out["mentions_before"] - out["mentions_after"]
+    return out
 
 
 # ---------------------------------------------------------------------------

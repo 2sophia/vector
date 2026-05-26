@@ -14,7 +14,7 @@ from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
 from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk
 from utils.qdrant import create_qdrant_collection, delete_qdrant_points
-from utils.falkor import delete_graph, purge_file_graph, export_graph
+from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
 from utils.store_schema import (
     get_effective_schema, get_schema_doc, set_schema, delete_store_schemas,
@@ -265,6 +265,41 @@ def get_curation_stats(vector_store_id: str):
         "boilerplate_ratio": CURATION_BOILERPLATE_RATIO,
         "boilerplate_min_docs": CURATION_BOILERPLATE_MIN_DOCS,
         **stats,
+    }
+
+
+@router.post("/{vector_store_id}/optimize")
+def optimize_vector_store(
+    vector_store_id: str,
+    min_score: float = Query(default=0.6, ge=0.0, le=1.0),
+    min_entity_len: int = Query(default=3, ge=1),
+    dry_run: bool = Query(default=False),
+):
+    """Ottimizza il vector store SENZA re-ingest, on-demand e idempotente.
+
+    Ripulisce il knowledge graph lavorando su ciò che è già stato estratto:
+    rimuove le menzioni con score < `min_score`, le entità "spazzatura" (nome corto
+    o solo numerazioni) e quelle rimaste orfane. Filtri agnostici (nessun dominio
+    hardcoded). Riporta anche le metriche di data curation (già coerenti per
+    costruzione: si aggiornano a ogni ingest). Con `dry_run=true` non cancella
+    nulla, conta soltanto cosa taglierebbe."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    graph = optimize_graph(
+        vector_store_id, min_score=min_score, min_entity_len=min_entity_len, dry_run=dry_run
+    )
+    curation = curation_stats(
+        vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS
+    )
+    return {
+        "object": "vector_store.optimize",
+        "vector_store_id": vector_store_id,
+        "dry_run": dry_run,
+        "graph": graph,
+        "curation": curation,
     }
 
 
