@@ -606,3 +606,98 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
     final_points = ordered_final[:max_context]
 
     return final_points
+
+
+# ---------------------------------------------------------------------------
+# Redundancy analysis — near-duplicate via concordanza dense ∩ sparse
+# ---------------------------------------------------------------------------
+
+def find_redundant_clusters(
+    collection_name: str,
+    dense_threshold: float = 0.96,
+    neighbor_topk: int = 20,
+    max_points: "int | None" = None,
+) -> Dict[str, Any]:
+    """Raggruppa i chunk near-duplicate in cluster (connected components).
+
+    Un near-dup è CONFERMATO solo se due chunk sono simili sopra `dense_threshold`
+    (stesso significato) E ciascuno è tra i top-K vicini sparse dell'altro (stesse
+    parole) → **concordanza dense ∩ sparse = duplicato sicuro**. Il caso "solo dense"
+    (significato simile ma parole diverse) è una possibile parafrasi/variante e NON
+    viene unito: è il guard-rail anti-cancellazione (in compliance la variante rara
+    va preservata). Riusa i vettori già in Qdrant: nessun costo di inferenza.
+
+    SOLA LETTURA: non marca né cancella, ritorna solo le statistiche. I vettori
+    sono interrogati per id (query=point_id usa il vettore memorizzato)."""
+    from collections import defaultdict
+
+    point_ids: List[Any] = []
+    offset = None
+    while True:
+        pts, offset = qdrant_client.scroll(
+            collection_name=collection_name, limit=512, offset=offset,
+            with_payload=False, with_vectors=False,
+        )
+        point_ids.extend(p.id for p in pts)
+        if offset is None:
+            break
+        if max_points and len(point_ids) >= max_points:
+            point_ids = point_ids[:max_points]
+            break
+
+    parent = {pid: pid for pid in point_ids}
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a, b):
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    idset = set(point_ids)
+    variants_preserved = 0  # coppie simili SOLO dense → non unite (guard-rail)
+    for pid in point_ids:
+        try:
+            d = qdrant_client.query_points(
+                collection_name=collection_name, query=pid, using="dense",
+                limit=neighbor_topk, score_threshold=dense_threshold, with_payload=False,
+            ).points
+        except Exception:
+            continue
+        dense_nb = {p.id for p in d if p.id != pid and p.id in idset}
+        if not dense_nb:
+            continue
+        try:
+            s = qdrant_client.query_points(
+                collection_name=collection_name, query=pid, using="sparse",
+                limit=neighbor_topk, with_payload=False,
+            ).points
+        except Exception:
+            s = set()
+        sparse_nb = {p.id for p in s if p.id != pid}
+        concordant = dense_nb & sparse_nb
+        variants_preserved += len(dense_nb - sparse_nb)
+        for nb in concordant:
+            _union(pid, nb)
+
+    clusters_map = defaultdict(list)
+    for pid in point_ids:
+        clusters_map[_find(pid)].append(pid)
+    clusters = [m for m in clusters_map.values() if len(m) >= 2]
+    redundant = sum(len(m) - 1 for m in clusters)  # tieni 1 rappresentante per cluster
+    n = len(point_ids)
+    return {
+        "points": n,
+        "clusters": len(clusters),
+        "redundant": redundant,
+        "kept": n - redundant,
+        "reduction_pct": round(100 * redundant / n, 1) if n else 0.0,
+        "variants_preserved": variants_preserved,
+        "dense_threshold": dense_threshold,
+        "neighbor_topk": neighbor_topk,
+        "top_cluster_sizes": sorted((len(m) for m in clusters), reverse=True)[:8],
+    }
