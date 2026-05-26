@@ -191,7 +191,7 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_FALKOR_HOST`           | `localhost`                            | FalkorDB host                            |
 | `SOPHIA_VECTOR_FALKOR_PASSWORD`       | `falkordb`                             | FalkorDB password (`requirepass`)        |
 | `SOPHIA_VECTOR_FALKOR_GRAPH_PREFIX`   | _(empty)_                              | Graph-name namespace (multi-project)     |
-| `SOPHIA_VECTOR_GLINER_MODEL`          | `urchade/gliner_multi-v2.1`            | GLiNER NER model (multilingual)          |
+| `SOPHIA_VECTOR_GLINER_MODEL`          | `gliner-community/gliner_medium-v2.5`  | GLiNER NER model (multilingual, Apache)  |
 | `SOPHIA_VECTOR_GLINER_LABELS`         | `organizzazione,persona,…`             | Entity labels (CSV, zero-shot default)   |
 | `SOPHIA_VECTOR_GLINER_DEVICE`         | `cpu`                                  | GLiNER/relex device (`cpu`/`cuda`/`auto`)|
 | `SOPHIA_VECTOR_ASR_DEVICE`            | `cpu`                                  | Whisper device (`cpu`/`cuda`/`auto`)     |

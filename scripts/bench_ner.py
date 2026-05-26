@@ -23,8 +23,8 @@ from typing import List
 
 # Candidati di default. Aggiungi/togli da CLI con --models.
 DEFAULT_MODELS = [
-    "urchade/gliner_multi-v2.1",                  # ATTUALE — mDeBERTa multilingua (base)
-    "knowledgator/gliner-multitask-large-v0.5",   # RetriCo — large (EN-centric, da verificare su IT)
+    "gliner-community/gliner_medium-v2.5",         # ATTUALE — community, Apache-2.0, DeBERTa-v3 multilingua
+    "urchade/gliner_multi-v2.1",                   # vecchio default (CC-BY-NC), per confronto
 ]
 
 

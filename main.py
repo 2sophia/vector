@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 
 from utils.logger import get_logger
 from utils.config import settings
+from utils.banner import render_banner
 from routers import (
     vector_stores_router,
     files_router,
@@ -30,9 +31,7 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("\n" + "=" * 60)
-    print(f"✨ {settings.APP_NAME} {settings.APP_VERSION}")
-    print("=" * 60 + "\n")
+    render_banner()
 
     stop_event.clear()
 

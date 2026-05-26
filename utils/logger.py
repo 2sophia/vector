@@ -2,6 +2,12 @@
 
 import logging
 import os
+import warnings
+
+# Rumore di huggingface_hub allo startup: la progress bar "Fetching N files: 100%|…"
+# e il UserWarning ripetuto su `resume_download` (emesso a ogni snapshot_download).
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+warnings.filterwarnings("ignore", message=r".*resume_download.*")
 
 # DEBUG solo se richiesto esplicitamente (SOPHIA_VECTOR_DEBUG=true); altrimenti INFO.
 # A DEBUG il root logger faceva sputare a httpcore/httpx/asyncio/huggingface_hub
@@ -18,6 +24,7 @@ logging.basicConfig(
 for _noisy in (
     "httpcore", "httpx", "urllib3", "asyncio",
     "huggingface_hub", "filelock", "transformers", "sentence_transformers",
+    "gliner", "gliner.model",
 ):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
