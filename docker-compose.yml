@@ -63,7 +63,7 @@ services:
   embeddings:
     image: sophiacloud/bge-m3-service:cuda
     container_name: embeddings
-    mem_limit: 4g
+    mem_limit: 8g
     environment:
       BGE_MODEL_MEMORY: ${BGE_MODEL_MEMORY:-0.20}
       BGE_DEVICE: ${BGE_MODEL_DEVICE:-cuda}
@@ -83,7 +83,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.18
     container_name: qdrant
-    mem_limit: 4g
+    mem_limit: 8g
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -97,7 +97,7 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     container_name: falkordb
-    mem_limit: 4g
+    mem_limit: 8g
     ports:
       - "127.0.0.1:6379:6379"
       - "127.0.0.1:6380:3000"
