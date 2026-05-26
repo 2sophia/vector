@@ -1,13 +1,27 @@
 """Logging configuration"""
 
 import logging
+import os
+
+# DEBUG solo se richiesto esplicitamente (SOPHIA_VECTOR_DEBUG=true); altrimenti INFO.
+# A DEBUG il root logger faceva sputare a httpcore/httpx/asyncio/huggingface_hub
+# OGNI richiesta HTTP (header inclusi) → log illeggibile.
+_DEBUG = os.getenv("SOPHIA_VECTOR_DEBUG", "false").strip().lower() in ("1", "true", "yes", "on")
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.DEBUG if _DEBUG else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 
-# Disabilita tutti i log di pymongo
+# Librerie di terze parti troppo rumorose: tenute a WARNING (loggano solo problemi
+# reali) così i log dell'app restano leggibili anche in DEBUG.
+for _noisy in (
+    "httpcore", "httpx", "urllib3", "asyncio",
+    "huggingface_hub", "filelock", "transformers", "sentence_transformers",
+):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+# pymongo: ancora più silenzioso
 logging.getLogger("pymongo").setLevel(logging.WARNING)
 logging.getLogger("pymongo.topology").setLevel(logging.ERROR)
 logging.getLogger("pymongo.connection").setLevel(logging.ERROR)
