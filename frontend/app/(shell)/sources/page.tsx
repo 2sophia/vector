@@ -216,7 +216,7 @@ export default function SourcesPage() {
                 id="src-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="es. Compliance ViViBanca"
+                placeholder="es. Documenti Compliance"
                 autoComplete="off"
                 autoFocus
               />

@@ -3,8 +3,8 @@
 /**
  * GraphViewer — visualizzatore force-graph (2D/3D) del knowledge graph.
  *
- * Portato da rgci-intelligence (react-force-graph) e adattato ai label di
- * sophia-vector (Document / Section / Chunk / Entity / Content). Componente
+ * Basato su react-force-graph e adattato ai label di sophia-vector
+ * (Document / Section / Chunk / Entity / Content). Componente
  * "puro": riceve `graphData` ({nodes, links}) via props, nessun accoppiamento
  * ad auth/store/API. Va caricato via `dynamic(..., { ssr: false })` perché
  * react-force-graph e three usano window/canvas/WebGL.

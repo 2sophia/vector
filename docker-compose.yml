@@ -13,7 +13,7 @@ services:
 #      - "8100:8100"             # backend
 #      - "3100:3100"             # frontend
 #    environment:
-#      NEXTAUTH_URL: "https://rgci-b.vivibanca.it"
+#      NEXTAUTH_URL: "https://vector.example.com"
 #      SOPHIA_VECTOR_SECRET_KEY: "<vedi .env.prod — NON committare segreti reali>"
 #      NEXTAUTH_SECRET: "<vedi .env.prod — NON committare segreti reali>"
 #    volumes:

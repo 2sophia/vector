@@ -184,7 +184,7 @@ export default function StoresPage() {
               id="vs-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="es. Compliance ViViBanca"
+              placeholder="es. Documenti Compliance"
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               autoFocus
             />

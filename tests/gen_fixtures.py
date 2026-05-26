@@ -154,7 +154,7 @@ def main():
     from email.message import EmailMessage
     msg = EmailMessage()
     msg["From"] = "Mario Rossi <mario@example.com>"
-    msg["To"] = "ufficio@vivibanca.it"
+    msg["To"] = "ufficio@example.com"
     msg["Subject"] = "Richiesta apertura conto"
     msg["Date"] = "Mon, 25 May 2026 10:00:00 +0200"
     msg.set_content(f"Buongiorno, parole chiave: {KEYWORDS}.")

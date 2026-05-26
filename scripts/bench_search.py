@@ -2,7 +2,7 @@
 """
 Mini-benchmark del retrieval (graph OFF vs ON) su un golden set.
 
-Golden set tarato sul documento "Testo Unico in materia di Trasparenza" (ViViBanca).
+Golden set tarato su un documento bancario ("Testo Unico in materia di Trasparenza").
 Per ogni query lancia /v1/vector_stores/{id}/search due volte (graph_expand false/true),
 trova a che rank compare il chunk "gold" (contiene TUTTE le keyword attese), e confronta.
 
@@ -25,7 +25,7 @@ GOLDEN = [
     ("Cos'è l'ISC e a cosa serve?",
      ["indicatore sintetico di costo"],
      "definizione acronimo (§5.2a)"),
-    ("Chi verifica i tassi soglia d'usura in ViViBanca?",
+    ("Chi verifica i tassi soglia d'usura?",
      ["pianificazione e controlli"],
      "TRAPPOLA: ruolo (tabella pag.9), non la definizione di usura (§5.2e)"),
     ("Quali documenti interni regolano la remunerazione della rete di vendita?",
