@@ -296,9 +296,12 @@ def optimize_vector_store(
     collections = [c.name for c in qdrant_client.get_collections().collections]
     if vector_store_id not in collections:
         raise HTTPException(status_code=404, detail="Vector store not found")
+    # Il graph-cleanup è distruttivo (irreversibile senza re-ingest): deve girare
+    # SOLO su un Applica vero. Reset marcatura è un'operazione di puro undo sui
+    # ridondanti → forziamo il dry_run sul grafo così non cancella nulla.
     graph = optimize_graph(
         vector_store_id, min_score=min_score, min_entity_len=min_entity_len,
-        drop_numeric=drop_numeric, dry_run=dry_run,
+        drop_numeric=drop_numeric, dry_run=dry_run or reset_redundancy,
     )
     curation = curation_stats(
         vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS
