@@ -5,7 +5,11 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/demo.gif" alt="Sophia Vector — demo (stores, ingestion, search, knowledge graph)" width="100%">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/demo.gif" alt="Sophia Vector — demo (stores, ingestion, search, knowledge graph)" width="78%">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — OpenAI-compatible API reference (Scalar)" width="92%">
 </p>
 
 OpenAI SDK Compatible Vector Store with Qdrant backend, a FalkorDB **knowledge graph**,
@@ -305,11 +309,7 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 ## API Documentation
 
-Interactive API reference (Scalar) — full `/v1/*` surface, try-it-out, MCP export:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — API reference (Scalar)" width="100%">
-</p>
+Interactive API reference (Scalar, shown above) — full `/v1/*` surface, try-it-out, MCP export:
 
 - API reference (Scalar): `http://localhost:8100/docs`
 - Raw OpenAPI schema: `http://localhost:8100/openapi.json`
