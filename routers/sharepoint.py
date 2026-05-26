@@ -14,6 +14,8 @@ from utils import get_timestamp
 from utils.database import db
 from utils.logger import get_logger
 from utils.qdrant import delete_qdrant_points
+from utils.falkor import purge_file_graph
+from utils.curation import purge_file_bodies
 from utils.filesystem import delete_file_from_disk
 from utils.schemas import StoreSchemaUpdate
 from utils.store_schema import (
@@ -505,6 +507,9 @@ async def delete_sharepoint_job(
                     await asyncio.to_thread(delete_qdrant_points, vector_store_id, "file_id", file_id)
                 except Exception as e:
                     logger.warning(f"delete_qdrant_points({vector_store_id}, {file_id}) failed: {e}")
+                # pulisci anche grafo + curation (best-effort), sennò restano orfani
+                await asyncio.to_thread(purge_file_graph, vector_store_id, file_id)
+                await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
                 await delete_file_from_disk(file_id)
             files_removed += 1
         await asyncio.to_thread(ingestion_jobs.delete_many, {"sharepoint_job_id": job_oid})

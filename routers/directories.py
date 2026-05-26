@@ -19,6 +19,8 @@ from utils import get_logger, get_timestamp, generate_id
 from utils.database import db
 from utils.settings import FILES_STORAGE
 from utils.qdrant import qdrant_client, create_qdrant_collection, delete_qdrant_points
+from utils.falkor import purge_file_graph
+from utils.curation import purge_file_bodies
 from utils.filesystem import delete_file_from_disk
 from utils.schemas import DirectoryCreate, DirectoryUpdate, DirectoryResponse, StoreSchemaUpdate
 from utils.store_schema import (
@@ -286,10 +288,13 @@ async def delete_directory(directory_id: str):
     await asyncio.to_thread(delete_schema_doc, "dir", f"{vector_store_id}:{slug}")
     job_query = {"vector_store_id": vector_store_id, f"attributes.{SLUG_FIELD}": slug}
 
-    # 1) File su disco (per ogni file_id dei job della directory)
+    # 1) File su disco + grafo + curation (per ogni file_id dei job della directory)
     file_ids = await asyncio.to_thread(ingestion_jobs.distinct, "file_id", job_query)
     for file_id in file_ids:
         await delete_file_from_disk(file_id)
+        # pulisci anche grafo + curation (best-effort), sennò restano orfani
+        await asyncio.to_thread(purge_file_graph, vector_store_id, file_id)
+        await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
 
     # 2) Punti Qdrant con questo slug (best-effort: la collection potrebbe non esistere)
     try:

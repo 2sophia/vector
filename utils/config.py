@@ -98,7 +98,11 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 512
 
     # --- Chunking / indexing defaults ---
-    DEFAULT_CHUNK_SIZE: int = 1024
+    # NB: il chunking REALE è governato da PARSER_MODEL_MAX_TOKENS (512) via Docling
+    # (vedi utils/docling.py). DEFAULT_CHUNK_SIZE serve solo al campo OpenAI-compat
+    # `chunking_strategy` di FileAttach (schemas.py), che NON guida il chunking →
+    # tenuto allineato a 512 per coerenza, non per effetto.
+    DEFAULT_CHUNK_SIZE: int = 512
     DEFAULT_CHUNK_OVERLAP: int = 128
     DEFAULT_EMBEDDING_DIMENSION: int = 1024
     DEFAULT_POINTS_BATCH_SIZE: int = 64

@@ -60,12 +60,10 @@ class RankingOptions(BaseModel):
     enable_rerank: Optional[bool] = True
     max_rerank_results: Optional[int] = 200  # Quanti risultati al rerank
 
-    # Retrival reranker params
-    dense_weight: Optional[float] = 0.1
-    sparse_weight: Optional[float] = 0.00
-    colbert_weight: Optional[float] = 1.0
-
-    enable_recommendation: Optional[bool] = True  ## retrival augmentation
+    # Recommendation (Qdrant recommend_for_seed): espansione OPT-IN, OFF di default.
+    # Si sovrappone concettualmente al graph-augmented retrieval (routers/search.py):
+    # tienila esplicita per avere canali di retrieval netti e benchmark affidabili.
+    enable_recommendation: Optional[bool] = False
     max_seed_results: Optional[int] = 3
     neighbors_per_seed: Optional[int] = 2
 

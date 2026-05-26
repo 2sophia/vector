@@ -383,11 +383,6 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
     sparse_limit = ranking_options.get('sparse_limit', 80)
     fusion_limit = ranking_options.get('fusion_limit', 50)
 
-    # Nuova configurazione pesi per reranker
-    dense_weight = ranking_options.get('dense_weight', 0.1)
-    sparse_weight = ranking_options.get('sparse_weight', 0.00)
-    colbert_weight = ranking_options.get('colbert_weight', 1.0)
-
     # Configurazioni aggiuntive per hybrid recommend
     enable_rerank = to_bool(ranking_options.get('enable_rerank', True))
     max_rerank_results = to_int(ranking_options.get('max_rerank_results', 200))
@@ -419,7 +414,6 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
     logger.debug(f"[PERFORM #RAG] Sparse:{sparse_threshold} | Limit:{sparse_limit}")
     logger.debug(f"[PERFORM #RAG] Fusion:{fusion_method} | Threshold:{fusion_threshold} | Limit:{fusion_limit}")
     logger.debug(f"[PERFORM #RAG] Filters:{filter_conditions}")
-    logger.debug(f"[PERFORM #RAG] Rerank Weight: D{dense_weight}| S{sparse_weight}| C{colbert_weight}")
 
     # https://colab.research.google.com/drive/1ALDrxN8gl5Rwju9W1wKw-luz0uKzQzT0#scrollTo=vPTKmMov_sIc
     results = qdrant_client.query_batch_points(
