@@ -63,14 +63,18 @@ class Settings(BaseSettings):
     FALKOR_GRAPH_PREFIX: str = ""
 
     # --- Entity extraction (M3 grafo: GLiNER zero-shot + regex, niente LLM) ---
-    # GLINER_ENABLED=False → solo regex (IBAN/CF/P.IVA). Le label sono CSV e
-    # vengono passate a GLiNER a runtime (zero-shot, dominio bancario IT).
+    # GLINER_ENABLED=False → solo regex (email/URL/IBAN/ISIN/importi/date/normativa
+    # + CF/P.IVA). Le label sono CSV e vengono passate a GLiNER a runtime (zero-shot).
     GLINER_ENABLED: bool = True
     # gliner-community v2.5: Apache-2.0 (vs CC-BY-NC dei urchade/*), DeBERTa-v3
     # multilingual, recall più alto sull'IT a parità/meno VRAM (benchmark 2026-05-26).
     GLINER_MODEL: str = "gliner-community/gliner_medium-v2.5"
     GLINER_THRESHOLD: float = 0.5
-    GLINER_LABELS: str = "organizzazione,persona,normativa,data,importo monetario,luogo,prodotto finanziario"
+    # Default TARATO sul dominio banking/legal IT (corpus reale, 2026-05-26): GLiNER
+    # estrae le entità "soft" (autorità, organi, prodotti…), la regex i riferimenti
+    # normativi strutturati. Le categorie ASTRATTE (concetti AML, processi) sono un
+    # caso da classificatore, non da NER. Cambia queste label per un altro dominio.
+    GLINER_LABELS: str = "autorità di vigilanza,organizzazione,persona,organo aziendale,normativa,prodotto finanziario,luogo,data,importo monetario"
     # Device del modello GLiNER: "cpu" | "cuda" | "cuda:N" | "auto" (GPU se c'è,
     # altrimenti CPU). Default CPU: il worker gira spesso sullo stesso host dove la
     # GPU è già presa da vLLM/embeddings/parser, e GLiNER è piccolo (~50ms/chunk su
