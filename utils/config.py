@@ -59,7 +59,9 @@ class Settings(BaseSettings):
     # GLINER_ENABLED=False → solo regex (IBAN/CF/P.IVA). Le label sono CSV e
     # vengono passate a GLiNER a runtime (zero-shot, dominio bancario IT).
     GLINER_ENABLED: bool = True
-    GLINER_MODEL: str = "urchade/gliner_multi-v2.1"
+    # gliner-community v2.5: Apache-2.0 (vs CC-BY-NC dei urchade/*), DeBERTa-v3
+    # multilingual, recall più alto sull'IT a parità/meno VRAM (benchmark 2026-05-26).
+    GLINER_MODEL: str = "gliner-community/gliner_medium-v2.5"
     GLINER_THRESHOLD: float = 0.5
     GLINER_LABELS: str = "organizzazione,persona,normativa,data,importo monetario,luogo,prodotto finanziario"
     # Device del modello GLiNER: "cpu" | "cuda" | "cuda:N" | "auto" (GPU se c'è,

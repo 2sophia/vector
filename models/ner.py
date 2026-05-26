@@ -105,7 +105,9 @@ class NerModel(ModelBase):
                 for seg_i, ents in enumerate(batch):
                     owner = owners[seg_i]
                     for e in ents:
-                        name = e["text"].strip()
+                        # collassa whitespace interno: GLiNER può restituire span a
+                        # cavallo di un a-capo (es. "Consorzi\nMontante") → "Consorzi Montante"
+                        name = re.sub(r"\s+", " ", e["text"]).strip()
                         # scarta entità troppo lunghe: quasi sempre rumore
                         if len(name) > 80 or len(name.split()) > 12:
                             continue

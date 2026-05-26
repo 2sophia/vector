@@ -12,6 +12,7 @@ Default OFF a livello globale (RELATIONS_ENABLED), ma un singolo store può abil
 worker. Mini-batch dei testi per non far esplodere la VRAM su GPU.
 """
 
+import re
 from typing import Any, Dict, List, Tuple
 
 from utils.logger import get_logger
@@ -39,14 +40,18 @@ class RelexModel(ModelBase):
     @staticmethod
     def _resolve_ref(ref: Any, ents: List[Dict[str, Any]]) -> Tuple[str, str]:
         """Risolve l'estremo (head/tail) in (testo, label). relex può referenziare
-        l'entità per `entity_idx` o passare il dict."""
+        l'entità per `entity_idx` o passare il dict. Il testo è ripulito dal
+        whitespace interno (span a cavallo di un a-capo) → coerente con la NER."""
         if isinstance(ref, dict):
             idx = ref.get("entity_idx")
             if isinstance(idx, int) and 0 <= idx < len(ents):
                 e = ents[idx]
-                return e.get("text", ""), e.get("label", "")
-            return ref.get("text", ""), ref.get("label") or ref.get("type") or ""
-        return (str(ref) if ref is not None else ""), ""
+                text, label = e.get("text", ""), e.get("label", "")
+            else:
+                text, label = ref.get("text", ""), ref.get("label") or ref.get("type") or ""
+        else:
+            text, label = (str(ref) if ref is not None else ""), ""
+        return re.sub(r"\s+", " ", text).strip(), label
 
     def extract(
         self,
