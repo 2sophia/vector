@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { SourceBrowser, type BrowseFolder } from "@/components/source-browser";
 import { SchemaEditor } from "@/components/schema-editor";
 import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -749,12 +749,17 @@ export default function DirectoryDetailPage() {
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="flex min-w-[16rem] flex-1 flex-col gap-1.5">
                     <Label htmlFor="src-select">Source</Label>
-                    <Select id="src-select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-                      {sources.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} · {s.type}
-                        </option>
-                      ))}
+                    <Select value={sourceId} onValueChange={setSourceId}>
+                      <SelectTrigger id="src-select">
+                        <SelectValue placeholder="Scegli una source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sources.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name} · {s.type}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                     </Select>
                   </div>
                   {!browseOpen && (

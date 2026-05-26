@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -137,21 +137,25 @@ export function AutoSyncPanel({ type = "sharepoint", label = "SharePoint" }: { t
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="cron-preset" className="text-xs">Frequenza</Label>
             <Select
-              id="cron-preset"
               value={isCustom ? "__custom" : cron}
-              onChange={(e) => {
-                if (e.target.value === "__custom") {
+              onValueChange={(v) => {
+                if (v === "__custom") {
                   setIsCustom(true);
                 } else {
                   setIsCustom(false);
-                  setCron(e.target.value);
+                  setCron(v);
                 }
               }}
             >
-              {PRESETS.map((p) => (
-                <option key={p.cron} value={p.cron}>{p.label}</option>
-              ))}
-              <option value="__custom">Personalizzato (cron)…</option>
+              <SelectTrigger id="cron-preset">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PRESETS.map((p) => (
+                  <SelectItem key={p.cron} value={p.cron}>{p.label}</SelectItem>
+                ))}
+                <SelectItem value="__custom">Personalizzato (cron)…</SelectItem>
+              </SelectContent>
             </Select>
           </div>
 

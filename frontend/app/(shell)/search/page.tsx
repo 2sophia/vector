@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { GraphData } from "@/components/graph-viewer";
@@ -269,11 +269,15 @@ export default function SearchPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_7rem]">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="search-store">Vector store</Label>
-                <Select id="search-store" value={storeId} onChange={(e) => setStoreId(e.target.value)}>
-                  {stores.length === 0 && <option value="">Nessuno store</option>}
-                  {stores.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
+                <Select value={storeId} onValueChange={setStoreId} disabled={stores.length === 0}>
+                  <SelectTrigger id="search-store">
+                    <SelectValue placeholder="Nessuno store" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stores.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
               <div className="flex flex-col gap-2">

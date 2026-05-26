@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AutoSyncPanel } from "@/components/auto-sync-panel";
@@ -225,19 +225,23 @@ export default function SourcesPage() {
             <div className="flex flex-col gap-2">
               <Label htmlFor="src-type">Tipo</Label>
               <Select
-                id="src-type"
                 value={type}
-                onChange={(e) => {
-                  setType(e.target.value);
+                onValueChange={(v) => {
+                  setType(v);
                   setConfig({});
                 }}
               >
-                {providers.map((p) => (
-                  <option key={p.type} value={p.type} disabled={!p.enabled}>
-                    {p.label}
-                    {!p.enabled ? " (presto)" : ""}
-                  </option>
-                ))}
+                <SelectTrigger id="src-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.map((p) => (
+                    <SelectItem key={p.type} value={p.type} disabled={!p.enabled}>
+                      {p.label}
+                      {!p.enabled ? " (presto)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
 
