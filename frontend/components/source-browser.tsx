@@ -132,14 +132,25 @@ export function SourceBrowser({ sourceId, selectedIds, onAdd, onClose }: Props) 
         <button onClick={() => gotoCrumb(-1)} className="text-zinc-500 hover:text-indigo-600">
           Librerie
         </button>
-        {crumbs.map((c, i) => (
-          <span key={i} className="inline-flex items-center gap-1">
-            <ChevronRight className="size-3 text-zinc-300 dark:text-zinc-600" />
-            <button onClick={() => gotoCrumb(i)} className="text-zinc-500 hover:text-indigo-600">
-              {c.label}
-            </button>
-          </span>
-        ))}
+        {crumbs.map((c, i) => {
+          const isLast = i === crumbs.length - 1;
+          return (
+            <span key={i} className="inline-flex items-center gap-1">
+              <ChevronRight className="size-3 text-zinc-300 dark:text-zinc-600" />
+              <button
+                onClick={() => gotoCrumb(i)}
+                className={cn(
+                  "hover:text-indigo-600",
+                  isLast
+                    ? "font-semibold text-zinc-800 dark:text-zinc-100"
+                    : "text-zinc-500",
+                )}
+              >
+                {c.label}
+              </button>
+            </span>
+          );
+        })}
         {onClose && (
           <Button variant="ghost" size="icon" className="ml-auto" onClick={onClose} aria-label="Chiudi">
             <X className="size-4" />
@@ -149,21 +160,27 @@ export function SourceBrowser({ sourceId, selectedIds, onAdd, onClose }: Props) 
 
       {/* hint + ricerca */}
       <div className="flex flex-col gap-1.5 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
-        {/* aggiungi la cartella CORRENTE (quella in cui sei entrato) */}
+        {/* aggiungi la cartella CORRENTE (quella in cui sei entrato), tutta */}
         {currentFolder && (
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-              Sei in <span className="font-medium text-zinc-700 dark:text-zinc-300">{currentFolder.name}</span>
+          <div className="flex items-center justify-between gap-3 rounded-md bg-indigo-50 px-2.5 py-2 dark:bg-indigo-950/30">
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <FolderTree className="size-5 shrink-0 text-indigo-500" />
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="text-[10px] uppercase tracking-wide text-zinc-400">Sei in</span>
+                <span className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                  {currentFolder.name}
+                </span>
+              </span>
             </span>
             {currentAdded ? (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
                 <Check className="size-3" />
                 Aggiunta
               </span>
             ) : (
               <Button size="sm" className="shrink-0" onClick={() => onAdd(currentFolder)}>
                 <Plus className="size-4" />
-                Aggiungi questa cartella
+                Aggiungi tutto
               </Button>
             )}
           </div>

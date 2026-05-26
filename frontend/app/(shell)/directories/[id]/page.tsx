@@ -690,15 +690,26 @@ export default function DirectoryDetailPage() {
               </p>
             ) : (
               <>
-                <div className="flex max-w-md flex-col gap-1.5">
-                  <Label htmlFor="src-select">Source</Label>
-                  <Select id="src-select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-                    {sources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} · {s.type}
-                      </option>
-                    ))}
-                  </Select>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="flex min-w-[16rem] flex-1 flex-col gap-1.5">
+                    <Label htmlFor="src-select">Source</Label>
+                    <Select id="src-select" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+                      {sources.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} · {s.type}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  {!browseOpen && (
+                    <Button
+                      variant="outline"
+                      onClick={() => (sourceId ? setBrowseOpen(true) : setError("Seleziona una source."))}
+                    >
+                      <FolderTree className="size-4" />
+                      Sfoglia cartelle
+                    </Button>
+                  )}
                 </div>
 
                 {folders.length > 0 && (
@@ -746,18 +757,7 @@ export default function DirectoryDetailPage() {
                   </div>
                 )}
 
-                {!browseOpen ? (
-                  <div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => (sourceId ? setBrowseOpen(true) : setError("Seleziona una source."))}
-                    >
-                      <FolderTree className="size-4" />
-                      Sfoglia cartelle
-                    </Button>
-                  </div>
-                ) : (
+                {browseOpen && (
                   <SourceBrowser
                     sourceId={sourceId}
                     selectedIds={folders.map((f) => f.sharepoint_id)}
