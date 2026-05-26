@@ -63,9 +63,12 @@ class Settings(BaseSettings):
     FALKOR_GRAPH_PREFIX: str = ""
 
     # --- Entity extraction (M3 grafo: GLiNER zero-shot + regex, niente LLM) ---
-    # GLINER_ENABLED=False → solo regex (email/URL/IBAN/ISIN/importi/date/normativa
-    # + CF/P.IVA). Le label sono CSV e vengono passate a GLiNER a runtime (zero-shot).
-    GLINER_ENABLED: bool = True
+    # GLiNER zero-shot è OFF di default: è pesante (~1.3GB, download modello) e
+    # rumoroso (zero-shot). Il GRAFO resta comunque ON e popolato dalle REGEX ad alta
+    # precisione (email/URL/IBAN/ISIN/importi/date/riferimenti normativi + CF/P.IVA):
+    # knowledge graph + viz out-of-the-box, leggero. Accendi GLiNER (opt-in) per le
+    # entità "soft" (autorità, organi, prodotti…). Le label sono CSV zero-shot.
+    GLINER_ENABLED: bool = False
     # gliner-community v2.5: Apache-2.0 (vs CC-BY-NC dei urchade/*), DeBERTa-v3
     # multilingual, recall più alto sull'IT a parità/meno VRAM (benchmark 2026-05-26).
     GLINER_MODEL: str = "gliner-community/gliner_medium-v2.5"
@@ -104,6 +107,19 @@ class Settings(BaseSettings):
     # entrambe non tipizzate ("other"→"other", tipico rumore da tabelle/figure).
     RELATIONS_MAX_ENTITY_WORDS: int = 8
     RELATIONS_DROP_OTHER_TO_OTHER: bool = True
+
+    # --- Document/chunk classification (GliClass zero-shot, opt-in) ---
+    # A differenza di GLiNER (estrae span = entità), GliClass CLASSIFICA il chunk su
+    # label arbitrarie (tipo-documento, tema, sensibilità) → tag in payload Qdrant →
+    # faceting/filtri nella search. È QUI che vivono le categorie ASTRATTE (concetti
+    # AML, processi), che non sono estrazione di span. Predisposto e OFF di default:
+    # richiede `pip install gliclass`. Best-effort (se lib/modello assenti l'ingestion
+    # prosegue senza tag). Riusa GLINER_DEVICE. Label CSV zero-shot, da tarare.
+    CLASSIFIER_ENABLED: bool = False
+    CLASSIFIER_MODEL: str = "knowledgator/gliclass-multilang-mini"
+    CLASSIFIER_THRESHOLD: float = 0.5
+    CLASSIFIER_MULTI_LABEL: bool = True
+    CLASSIFIER_LABELS: str = "policy,procedura,circolare,modulo,normativa,comunicazione,report,contratto,dato personale"
 
     # --- Storage su disco ---
     FILES_STORAGE: str = "/app/storage/files"

@@ -15,9 +15,11 @@ from utils.logger import get_logger
 from utils.settings import (
     GLINER_ENABLED, GLINER_MODEL, GLINER_DEVICE,
     RELATIONS_ENABLED, RELATIONS_MODEL,
+    CLASSIFIER_ENABLED, CLASSIFIER_MODEL,
 )
 from .ner import NerModel
 from .relex import RelexModel
+from .classifier import ClassifierModel
 
 logger = get_logger(__name__)
 
@@ -29,6 +31,10 @@ class ModelRegistry:
         # relex: device condiviso con GLiNER; abilitabile per-scope, quindi a livello
         # modello resta "caricabile on-demand" (il gate vero è nel worker).
         self.relex = RelexModel(RELATIONS_MODEL, GLINER_DEVICE, "GLiNER-relex", enabled=True)
+        # classifier: GliClass zero-shot, opt-in (serve `pip install gliclass`).
+        self.classifier = ClassifierModel(
+            CLASSIFIER_MODEL, GLINER_DEVICE, "GliClass", enabled=CLASSIFIER_ENABLED
+        )
 
     def warmup_all(self) -> None:
         """Pre-carica i modelli necessari allo start del worker (best-effort)."""
@@ -38,6 +44,8 @@ class ModelRegistry:
         # il primo store che lo abilita via schema, per non sprecare RAM/VRAM).
         if RELATIONS_ENABLED:
             self.relex.load()
+        if CLASSIFIER_ENABLED:
+            self.classifier.load()
 
 
 # istanza unica, importata dal worker

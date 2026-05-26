@@ -325,6 +325,16 @@ async def handle_job(job: Dict[str, Any]):
             except Exception as e:
                 logger.warning(f"[{tag}] relation extraction failed at batch {batch_num}: {e}")
 
+        # Classificazione (GliClass zero-shot, opt-in): tag tema/tipo/sensibilità sul
+        # chunk → payload per faceting/filtri nella search. Best-effort.
+        chunk_categories = [[] for _ in texts]
+        if registry.classifier.enabled:
+            try:
+                cls_batch = await asyncio.to_thread(registry.classifier.classify, texts)
+                chunk_categories = [[r["label"] for r in rows] for rows in cls_batch]
+            except Exception as e:
+                logger.warning(f"[{tag}] classification failed at batch {batch_num}: {e}")
+
         # Costruisci PointStruct.
         # Gli attributes vengono APPIATTITI top-level (contratto prod): es.
         # `sophia_directory_slug`/`sharepoint_file_id` sono filtrati top-level
@@ -345,6 +355,10 @@ async def handle_job(job: Dict[str, Any]):
             for k, v in attributes.items():
                 if k not in RESERVED_PAYLOAD_KEYS:
                     payload[k] = v
+            # tag di classificazione (se il classifier è attivo) → faceting search
+            cats = chunk_categories[i] if i < len(chunk_categories) else []
+            if cats:
+                payload["category"] = cats
             point_id = str(uuid.uuid4())
             points.append(PointStruct(
                 id=point_id,

@@ -36,12 +36,16 @@ the gap it fills.
   (local Whisper transcription); a pre-parser layer converts whatever Docling can't read natively.
   See [Supported formats](#supported-formats)
 - **Knowledge graph (FalkorDB)** — every document becomes `Document → Section → Chunk` with a
-  reading-order `:NEXT` chain, plus deterministic **entity extraction** (GLiNER zero-shot NER +
-  high-precision regex for emails, URLs, IBAN/ISIN, amounts, dates, legal references and Italian
-  codice fiscale / P.IVA — **no LLM in ingestion**) and optional **typed relations** between
-  entities (GLiNER-relex, zero-shot, off by default)
-- **Configurable extraction schema** — the GLiNER engine is zero-shot, so *what* to extract is
-  data: entity labels, relation labels and the relations toggle resolve through a
+  reading-order `:NEXT` chain. The graph is **on out-of-the-box**, populated by **high-precision
+  regex** (emails, URLs, IBAN/ISIN, amounts, dates, legal references, Italian codice fiscale /
+  P.IVA — light, no model download). **Zero-shot NER** (GLiNER) for the "soft" entities (authorities,
+  bodies, products) and **typed relations** (GLiNER-relex) are **opt-in** — heavier, noisier, off by
+  default. **No LLM in ingestion**
+- **Zero-shot classification (opt-in)** — GliClass tags chunks by **document type / theme /
+  sensitivity** for faceting and filtering at search time; this is where *abstract* categories live
+  (vs entity spans). Off by default (`pip install gliclass` to enable)
+- **Configurable extraction schema** — the engine is zero-shot, so *what* to extract is data:
+  entity labels, relation labels and the relations toggle resolve through a
   **file → directory → sync → store → global** cascade, editable from the UI at every level.
   Defaults lean **banking / legal** (financial labels, Italian regulatory references) — point them
   at your own domain by editing the labels and thresholds
@@ -210,12 +214,15 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_FALKOR_HOST`           | `localhost`                            | FalkorDB host                            |
 | `SOPHIA_VECTOR_FALKOR_PASSWORD`       | `falkordb`                             | FalkorDB password (`requirepass`)        |
 | `SOPHIA_VECTOR_FALKOR_GRAPH_PREFIX`   | _(empty)_                              | Graph-name namespace (multi-project)     |
+| `SOPHIA_VECTOR_GLINER_ENABLED`        | `false`                                | Zero-shot NER (opt-in; graph runs on regex when off) |
 | `SOPHIA_VECTOR_GLINER_MODEL`          | `gliner-community/gliner_medium-v2.5`  | GLiNER NER model (multilingual, Apache)  |
 | `SOPHIA_VECTOR_GLINER_LABELS`         | `autorità di vigilanza,organizzazione,…`| Entity labels (CSV, zero-shot; banking default) |
 | `SOPHIA_VECTOR_GLINER_DEVICE`         | `cpu`                                  | GLiNER/relex device (`cpu`/`cuda`/`auto`)|
 | `SOPHIA_VECTOR_ASR_DEVICE`            | `cpu`                                  | Whisper device (`cpu`/`cuda`/`auto`)     |
 | `SOPHIA_VECTOR_RELATIONS_ENABLED`     | `false`                                | Typed relation extraction (GLiNER-relex) |
 | `SOPHIA_VECTOR_RELATIONS_LABELS`      | `pubblicato da,emesso da,…`            | Relation labels (CSV, zero-shot default) |
+| `SOPHIA_VECTOR_CLASSIFIER_ENABLED`    | `false`                                | Zero-shot chunk classification (GliClass; opt-in, needs `pip install gliclass`) |
+| `SOPHIA_VECTOR_CLASSIFIER_LABELS`     | `policy,procedura,circolare,…`         | Classification labels (CSV, zero-shot)   |
 | `SOPHIA_VECTOR_CURATION_ENABLED`      | `true`                                 | Boilerplate detection + suppression      |
 | `SOPHIA_VECTOR_INTERNAL_API_URL`      | `http://127.0.0.1:8100`                | Scheduler → backend (internal)           |
 
