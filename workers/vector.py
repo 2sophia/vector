@@ -15,6 +15,7 @@ import uuid
 import shutil
 import asyncio
 import logging
+import threading
 from typing import List, Dict, Any
 
 from qdrant_client.models import PointStruct
@@ -22,7 +23,7 @@ from qdrant_client.models import PointStruct
 from utils import get_timestamp
 from utils.database import db
 from utils.qdrant import qdrant_client, delete_qdrant_points
-from utils.docling import upload_file_for_chunking_sync
+from utils.docling import upload_file_for_chunking_sync, clear_caches
 from utils.convert import normalize_for_parser, UnsupportedFormatError
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
@@ -40,6 +41,7 @@ from utils.settings import (
     INGEST_BATCH_SIZE,
     INGEST_MAX_CONCURRENT_JOBS as MAX_CONCURRENT_JOBS,
     INGEST_WAIT_TIME_JOBS as POLL_INTERVAL,
+    DOCLING_CLEAR_EVERY,
 )
 
 jobs_coll = db["ingestion_jobs"]
@@ -55,6 +57,37 @@ RESERVED_PAYLOAD_KEYS = frozenset({
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vector-worker")
+
+
+# ---------------------------------------------------------------------------
+# Anti-leak Docling (Layer 1): l'OCR trattiene i modelli → la RAM del parser
+# sale e non scende. Svuotiamo le cache ogni N doc completati, e comunque a fine
+# batch. Fire-and-forget in un thread daemon: best-effort, non blocca né rallenta
+# l'ingestion (il clear NON libera la VRAM, che richiede il restart del container).
+# ---------------------------------------------------------------------------
+_docs_since_clear = 0
+
+
+def _fire_docling_clear() -> None:
+    threading.Thread(target=clear_caches, daemon=True, name="docling-clear").start()
+    logger.info("🧹 Docling cache clear (fire-and-forget)")
+
+
+def _maybe_clear_docling(force: bool = False) -> None:
+    """Conta i doc completati; lancia il clear ogni DOCLING_CLEAR_EVERY, e a fine
+    batch (force=True) se c'è stato almeno un doc dall'ultimo clear. 0 = off."""
+    global _docs_since_clear
+    if DOCLING_CLEAR_EVERY <= 0:
+        return
+    if force:
+        if _docs_since_clear > 0:
+            _docs_since_clear = 0
+            _fire_docling_clear()
+        return
+    _docs_since_clear += 1
+    if _docs_since_clear >= DOCLING_CLEAR_EVERY:
+        _docs_since_clear = 0
+        _fire_docling_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +415,7 @@ async def handle_job(job: Dict[str, Any]):
     await cleanup_superseded(job, vector_store_id)
     await set_job_status(job_id, "COMPLETED", {"stats.num_chunks": total_indexed})
     logger.info(f"[{tag}] COMPLETED — {total_indexed} chunks indexed")
+    _maybe_clear_docling()  # Layer 1 anti-leak: clear ogni N doc
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +447,8 @@ async def main_loop():
             await asyncio.sleep(5.0)
             continue
 
-        # Coda vuota → poll lento
+        # Coda vuota → clear finale di fine batch (best-effort), poi poll lento
+        _maybe_clear_docling(force=True)
         await asyncio.sleep(POLL_INTERVAL)
 
 

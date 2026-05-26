@@ -235,6 +235,26 @@ def get_task_results(task_id: str) -> dict:
         raise
 
 
+def clear_caches() -> bool:
+    """Svuota le cache di Docling (risultati + converter) per contenere il leak
+    di RAM (EasyOCR trattiene i modelli OCR allocati). Best-effort: NON solleva
+    mai — il cleanup non deve far fallire l'ingestion. Ritorna True se entrambi
+    gli endpoint rispondono 2xx.
+
+    NB: NON libera la VRAM (i modelli su GPU restano caricati); quella richiede
+    il restart del container parser."""
+    ok = True
+    for path in ("/v1/clear/results", "/v1/clear/converters"):
+        url = f"{DOCLING_URL}{path}"
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            ok = False
+            logger.warning(f"Docling clear fallito ({path}): {e}")
+    return ok
+
+
 def upload_file_for_chunking_task_async(file_path: str) -> dict:
     """
     Carica un file per chunking asincrono.

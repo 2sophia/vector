@@ -37,6 +37,13 @@ class Settings(BaseSettings):
 
     # --- Docling (parser) ---
     DOCLING_URL: str = "http://localhost:5001"
+    # Anti-leak (default ON: è un must di vector). Ogni N doc completati il worker
+    # svuota le cache di Docling (GET /v1/clear/converters + /v1/clear/results):
+    # l'OCR (EasyOCR) trattiene i modelli → la RAM sale e non scende, il clear la
+    # libera (verificato: −600MB). NON libera la VRAM (serve il restart del
+    # container). N più basso = RAM più contenuta ma più reload dei converter.
+    # 0 = disattivato.
+    DOCLING_CLEAR_EVERY: int = 20
 
     # --- Embeddings + rerank (BGE-M3 service, espone /v1/embeddings e /v1/rerank) ---
     EMBEDDINGS_URL: str = "http://localhost:8004"

@@ -11,6 +11,7 @@ from utils.config import settings
 # Qdrant & servizi
 QDRANT_URL = settings.QDRANT_URL
 DOCLING_URL = settings.DOCLING_URL
+DOCLING_CLEAR_EVERY = settings.DOCLING_CLEAR_EVERY
 MONGODB_DB_URI = settings.MONGODB_URI
 BGE_M3_URL = settings.EMBEDDINGS_URL
 
