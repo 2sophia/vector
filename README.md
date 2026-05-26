@@ -14,6 +14,16 @@ Sophia Vector is a FastAPI vector storage/retrieval system with an OpenAI-compat
 search). On top of classic hybrid search it builds a **knowledge graph** (FalkorDB) over the same
 chunks and offers **graph-augmented retrieval**. Backend and frontend ship in the same Docker image.
 
+## Where Sophia Vector fits
+
+Sophia Vector isn't a Milvus alternative (Milvus is a billion-scale, distributed **vector
+database**) nor a RAGFlow replacement (a mature, full-featured **RAG engine**). It's an
+**OpenAI-compatible, self-hosted RAG store**: drop-in `/v1/*` endpoints, document parsing
+(Docling), hybrid search with reranking — and, built in rather than bolted on, a **knowledge
+graph** and **semantic deduplication you can maintain without re-ingesting**. If you already use
+the OpenAI SDK and want a self-hosted backend with a graph and a content-curation layer, that's
+the gap it fills.
+
 ## Features
 
 - **OpenAI-compatible API** — drop-in vector store endpoints under `/v1/*`
