@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Share2,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -160,6 +161,12 @@ export default function VectorStoreDetailPage() {
               <Button variant="outline" size="sm">
                 <Share2 className="size-4" />
                 Grafo
+              </Button>
+            </Link>
+            <Link href={`/stores/${vectorStoreId}/optimize`}>
+              <Button variant="outline" size="sm">
+                <Wand2 className="size-4" />
+                Optimize
               </Button>
             </Link>
             <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>

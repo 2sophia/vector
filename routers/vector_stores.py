@@ -273,6 +273,7 @@ def optimize_vector_store(
     vector_store_id: str,
     min_score: float = Query(default=0.6, ge=0.0, le=1.0),
     min_entity_len: int = Query(default=3, ge=1),
+    drop_numeric: bool = Query(default=True),
     dry_run: bool = Query(default=False),
 ):
     """Ottimizza il vector store SENZA re-ingest, on-demand e idempotente.
@@ -289,7 +290,8 @@ def optimize_vector_store(
     if vector_store_id not in collections:
         raise HTTPException(status_code=404, detail="Vector store not found")
     graph = optimize_graph(
-        vector_store_id, min_score=min_score, min_entity_len=min_entity_len, dry_run=dry_run
+        vector_store_id, min_score=min_score, min_entity_len=min_entity_len,
+        drop_numeric=drop_numeric, dry_run=dry_run,
     )
     curation = curation_stats(
         vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS

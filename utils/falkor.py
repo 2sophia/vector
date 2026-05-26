@@ -130,15 +130,20 @@ def delete_graph(vector_store_id: str) -> None:
 _NUMERICISH_RE = re.compile(r"^[0-9.,;:()\-/ ]+$")
 
 
-def _is_junk_entity(name: str, min_len: int) -> bool:
+def _is_junk_entity(name: str, min_len: int, drop_numeric: bool = True) -> bool:
     n = (name or "").strip()
-    return len(n) < min_len or bool(_NUMERICISH_RE.match(n))
+    if len(n) < min_len:
+        return True
+    if drop_numeric and _NUMERICISH_RE.match(n):
+        return True
+    return False
 
 
 def optimize_graph(
     vector_store_id: str,
     min_score: float = 0.6,
     min_entity_len: int = 3,
+    drop_numeric: bool = True,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Ripulisce il grafo entità SENZA re-ingest, lavorando su ciò che c'è:
@@ -159,12 +164,13 @@ def optimize_graph(
 
     # Le entità le filtro in Python (FalkorDB non ha regex): leggo (id, name).
     ent_rows = g.query("MATCH (e:Entity) RETURN e.id, e.name").result_set or []
-    junk_ids = [row[0] for row in ent_rows if _is_junk_entity(row[1], min_entity_len)]
+    junk_ids = [row[0] for row in ent_rows if _is_junk_entity(row[1], min_entity_len, drop_numeric)]
 
     out: Dict[str, Any] = {
         "enabled": True,
         "min_score": min_score,
         "min_entity_len": min_entity_len,
+        "drop_numeric": drop_numeric,
         "entities_before": len(ent_rows),
         "mentions_before": _cnt("MATCH ()-[r:MENTIONS]->() RETURN count(r)"),
         "weak_mentions": _cnt("MATCH ()-[r:MENTIONS]->() WHERE r.score < $s RETURN count(r)", {"s": min_score}),
