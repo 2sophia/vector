@@ -18,6 +18,9 @@ croniter
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch
 gliner
+# classificazione zero-shot dei chunk (opt-in, CLASSIFIER_ENABLED). Tira dietro
+# scikit-learn/scipy: serve solo se accendi il classifier, ma lo teniamo allineato.
+gliclass
 python-dotenv
 rich
 # conversione mail Outlook .msg → HTML (pre-parser, vedi utils/convert.py).

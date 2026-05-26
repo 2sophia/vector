@@ -119,7 +119,11 @@ class Settings(BaseSettings):
     CLASSIFIER_MODEL: str = "knowledgator/gliclass-multilang-mini"
     CLASSIFIER_THRESHOLD: float = 0.5
     CLASSIFIER_MULTI_LABEL: bool = True
-    CLASSIFIER_LABELS: str = "policy,procedura,circolare,modulo,normativa,comunicazione,report,contratto,dato personale"
+    # Label per TEMA + sensibilità, NON per tipo-documento: i tipi (policy/circolare…)
+    # si sovrappongono troppo → in zero-shot multi-label il modello accende tutto e non
+    # discrimina. I temi sono ortogonali (validato: AML→antiriciclaggio, GDPR→privacy)
+    # e il tipo-doc spesso lo sai già da cartella/filename. Tara questi sul tuo dominio.
+    CLASSIFIER_LABELS: str = "antiriciclaggio,privacy e protezione dati,governance societaria,gestione del credito,sicurezza informatica,vigilanza e compliance,dato personale"
 
     # --- Storage su disco ---
     FILES_STORAGE: str = "/app/storage/files"
