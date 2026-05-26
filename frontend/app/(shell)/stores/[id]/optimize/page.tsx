@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Wand2, Eye, Play, Loader2, Trash2, FileText } from "lucide-react";
+import { ArrowLeft, Wand2, Eye, Play, Loader2, Trash2, FileText, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,21 @@ type CurationStats = {
   boilerplate_contents?: number;
   max_doc_frequency?: number;
 };
-type OptimizeResult = { dry_run: boolean; graph: GraphStats; curation: CurationStats };
+type RedundancyStats = {
+  points?: number;
+  clusters?: number;
+  redundant?: number;
+  kept?: number;
+  reduction_pct?: number;
+  variants_preserved?: number;
+  dense_threshold?: number;
+};
+type OptimizeResult = {
+  dry_run: boolean;
+  graph: GraphStats;
+  curation: CurationStats;
+  redundancy?: RedundancyStats | null;
+};
 
 export default function OptimizePage() {
   const params = useParams<{ id: string }>();
@@ -41,6 +55,7 @@ export default function OptimizePage() {
   const [minScore, setMinScore] = useState(0.6);
   const [minLen, setMinLen] = useState(3);
   const [dropNumeric, setDropNumeric] = useState(true);
+  const [denseThreshold, setDenseThreshold] = useState(0.96);
 
   const [busy, setBusy] = useState<false | "preview" | "apply">(false);
   const [result, setResult] = useState<OptimizeResult | null>(null);
@@ -53,10 +68,11 @@ export default function OptimizePage() {
       setError(null);
       const qs =
         `min_score=${minScore}&min_entity_len=${minLen}` +
-        `&drop_numeric=${dropNumeric}&dry_run=${dryRun}`;
+        `&drop_numeric=${dropNumeric}&dense_threshold=${denseThreshold}&dry_run=${dryRun}`;
       const flags =
         `--min-score ${minScore} --min-entity-len ${minLen}` +
-        `${dropNumeric ? " --drop-numeric" : ""}${dryRun ? " --dry-run" : ""}`;
+        `${dropNumeric ? " --drop-numeric" : ""} --sim ${denseThreshold}` +
+        `${dryRun ? " --dry-run" : ""}`;
       try {
         const r = await api.post<OptimizeResult>(`/vector_stores/${vsid}/optimize?${qs}`);
         setResult(r);
@@ -80,6 +96,15 @@ export default function OptimizePage() {
             lines.push("done.");
           }
         }
+        const rd = r.redundancy;
+        if (rd && rd.points) {
+          lines.push(
+            `→ ridondanza (sim ≥ ${denseThreshold}): ${rd.clusters} cluster · ` +
+              `${rd.redundant} near-duplicate (−${rd.reduction_pct}%)`,
+          );
+          if (rd.variants_preserved)
+            lines.push(`→ varianti preservate (solo-dense): ${rd.variants_preserved}`);
+        }
         setLog((prev) => [...prev, ...lines, ""]);
       } catch (e) {
         setError(String(e));
@@ -88,7 +113,7 @@ export default function OptimizePage() {
         setBusy(false);
       }
     },
-    [vsid, minScore, minLen, dropNumeric],
+    [vsid, minScore, minLen, dropNumeric, denseThreshold],
   );
 
   const g = result?.graph;
@@ -186,6 +211,31 @@ export default function OptimizePage() {
                 {dropNumeric ? "Attivo" : "Disattivo"}
               </Button>
             </div>
+
+            {/* similarità ridondanza (dense ∩ sparse) */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="dense-thr">Similarità ridondanza (dense ∩ sparse)</Label>
+                <span className="font-mono text-sm text-indigo-600 dark:text-indigo-400">
+                  {denseThreshold.toFixed(2)}
+                </span>
+              </div>
+              <input
+                id="dense-thr"
+                type="range"
+                min={0.9}
+                max={0.99}
+                step={0.01}
+                value={denseThreshold}
+                onChange={(e) => setDenseThreshold(parseFloat(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Chunk near-duplicate: simili sopra soglia <em>e</em> concordi nello sparse
+                (il solo-dense è una variante e viene preservato). Più alto = solo i
+                quasi-identici.
+              </p>
+            </div>
           </CardContent>
         </Card>
 
@@ -225,6 +275,16 @@ export default function OptimizePage() {
             <Stat label="Menzioni (totali)" value={result?.dry_run ? g.mentions_before : g.mentions_after} icon={<FileText className="size-4" />} />
           </div>
         )}
+
+        {/* REDUNDANCY (dense ∩ sparse) */}
+        {result?.redundancy && result.redundancy.points ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Cluster ridondanti" value={result.redundancy.clusters} icon={<Layers className="size-4" />} />
+            <Stat label="Chunk near-duplicate" value={result.redundancy.redundant} icon={<Trash2 className="size-4" />} tone="amber" />
+            <Stat label="Riduzione possibile" value={`${result.redundancy.reduction_pct ?? 0}%`} tone="amber" />
+            <Stat label="Varianti preservate" value={result.redundancy.variants_preserved} icon={<FileText className="size-4" />} />
+          </div>
+        ) : null}
 
         {/* LOG */}
         {log.length > 0 && (
@@ -275,7 +335,7 @@ function Stat({
   tone,
 }: {
   label: string;
-  value?: number;
+  value?: number | string;
   icon?: React.ReactNode;
   tone?: "amber";
 }) {
