@@ -40,7 +40,11 @@ class VectorStoreUpdate(BaseModel):
 
 class RankingOptions(BaseModel):
     """Opzioni per il ranking e reranking dei risultati."""
-    score_threshold: Optional[float] = 0.22
+    # Soglia sul punteggio ASSOLUTO del cross-encoder dopo il rerank. NON è portabile
+    # (verbatim ~0.98, parafrasi/cross-lingua 0.05–0.2): 0.22 azzerava query oblique
+    # legittime → 0.1 recupera il borderline, scarta la spazzatura (<0.05), non tocca
+    # l'ordine (i match in-corpus restano ~0.98). Vedi utils/qdrant.py.
+    score_threshold: Optional[float] = 0.1
 
     # hybrid search parameters
     dense_limit: Optional[int] = 150  # Quanti risultati recuperare per dense
