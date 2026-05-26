@@ -127,7 +127,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 
 ```bash
 ./compile-and-publish.sh [version]            # CPU image, multi-arch (amd64 + arm64) + push
-./compile-and-publish.sh [version] cuda       # GPU image (torch cu130), amd64 → :<version>-cuda
+./compile-and-publish.sh [version] cu130      # GPU image (torch cu130), amd64 → :<version>-cu130
 # or directly:
 docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.3.0-alpha --push .
 ```
@@ -142,19 +142,19 @@ docker compose pull sophia-vector && docker compose up -d sophia-vector
 ### GPU acceleration (optional)
 
 The default image is **CPU-only** (torch CPU wheels): GLiNER, GLiNER-relex and Whisper run on CPU,
-which is fine for moderate volumes. To run them on a GPU, build the **CUDA flavor**
-(`Dockerfile.cuda`, torch cu130, ~2 GB larger):
+which is fine for moderate volumes. To run them on a GPU, build the **GPU flavor**
+(`Dockerfile.cu130`, torch cu130 / CUDA 13.0, ~2 GB larger):
 
 ```bash
-./compile-and-publish.sh 0.3.0-alpha cuda     # → sophiacloud/vector:0.3.0-alpha-cuda
+./compile-and-publish.sh 0.3.0-alpha cu130    # → sophiacloud/vector:0.3.0-alpha-cu130
 ```
 
-Then point the compose service at the `-cuda` image, give it the GPU (host needs the NVIDIA driver
+Then point the compose service at the `-cu130` image, give it the GPU (host needs the NVIDIA driver
 + `nvidia-container-toolkit`), and opt the models in via env:
 
 ```yaml
 # docker-compose.yml (sophia-vector service)
-image: sophiacloud/vector:0.3.0-alpha-cuda
+image: sophiacloud/vector:0.3.0-alpha-cu130
 deploy:
   resources:
     reservations:

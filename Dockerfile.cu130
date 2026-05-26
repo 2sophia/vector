@@ -1,5 +1,5 @@
 # ==============================================================================
-# Sophia Vector — variante CUDA (GPU).
+# Sophia Vector — variante GPU (CUDA 13.0 / torch cu130).
 #
 # Identica al `Dockerfile` (CPU) tranne UNA riga: torch è installato dalle wheel
 # cu130 invece che dalle CPU-only. Le wheel cu130 portano già cuDNN/cuBLAS come
@@ -15,8 +15,9 @@
 # riga `pip install torch ... --index-url .../cu130`.
 #
 # Build (amd64; le wheel cu130 sono x86_64):
-#   docker buildx build -f Dockerfile.cuda --platform linux/amd64 \
-#     -t sophiacloud/vector:<versione>-cuda --push .
+#   ./compile-and-publish.sh <versione> cu130
+#   # oppure: docker buildx build -f Dockerfile.cu130 --platform linux/amd64 \
+#   #           -t sophiacloud/vector:<versione>-cu130 --push .
 # ==============================================================================
 
 # ==============================================================================
