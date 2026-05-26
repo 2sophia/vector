@@ -13,6 +13,9 @@ __pycache__/
 .data/
 storage/
 .claude
+
+# Modelli fine-tunati prodotti dalla suite tuning/
+tuning/out/
 CLAUDE.md
 .env.bak-20260524
 
