@@ -96,7 +96,7 @@ export default function OptimizePage() {
 
   return (
     <div className="px-8 py-10">
-      <div className="mx-auto flex max-w-4xl flex-col gap-6">
+      <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <Link
           href={`/stores/${vsid}`}
           className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
