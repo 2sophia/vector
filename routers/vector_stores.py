@@ -435,7 +435,8 @@ async def remove_file_from_vector_store(vector_store_id: str, file_id: str):
             raise HTTPException(status_code=404, detail="File not found")
 
         # --- Check if collection exists ---
-        collections = [c.name for c in qdrant_client.get_collections().collections]
+        _cols = await asyncio.to_thread(qdrant_client.get_collections)
+        collections = [c.name for c in _cols.collections]
         if vector_store_id not in collections:
             raise HTTPException(status_code=404, detail="Vector store not found")
 
@@ -446,7 +447,8 @@ async def remove_file_from_vector_store(vector_store_id: str, file_id: str):
             raise HTTPException(status_code=404, detail="File not found")
 
         # --- Delete all Qdrant points with this file_id ---
-        delete_qdrant_points(
+        await asyncio.to_thread(
+            delete_qdrant_points,
             collection_name=vector_store_id,
             field_name="file_id",  # <--- chiave dinamica
             field_value=file_id  # <--- valore dinamico
@@ -469,7 +471,8 @@ async def remove_file_from_vector_store(vector_store_id: str, file_id: str):
         await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
 
         # --- Delete job from Mongo ---
-        job_delete_result = ingestion_jobs.delete_one(
+        job_delete_result = await asyncio.to_thread(
+            ingestion_jobs.delete_one,
             {"vector_store_id": vector_store_id, "file_id": file_id}
         )
         job_deleted = job_delete_result.deleted_count > 0

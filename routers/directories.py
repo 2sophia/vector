@@ -222,7 +222,7 @@ async def get_directory_schema(directory_id: str):
     doc = await asyncio.to_thread(directories_coll.find_one, {"_id": directory_id})
     if not doc:
         raise HTTPException(status_code=404, detail="Directory not found")
-    return _dir_schema_response(directory_id, doc["vector_store_id"], doc.get("slug", ""))
+    return await asyncio.to_thread(_dir_schema_response, directory_id, doc["vector_store_id"], doc.get("slug", ""))
 
 
 @router.put("/{directory_id}/schema")
@@ -237,7 +237,7 @@ async def put_directory_schema(directory_id: str, body: StoreSchemaUpdate):
         set_schema, "dir", f"{vs}:{slug}", vs,
         body.entity_labels, body.relation_labels, body.relations_enabled,
     )
-    return _dir_schema_response(directory_id, vs, slug)
+    return await asyncio.to_thread(_dir_schema_response, directory_id, vs, slug)
 
 
 @router.delete("/{directory_id}/schema")
@@ -248,7 +248,7 @@ async def reset_directory_schema(directory_id: str):
         raise HTTPException(status_code=404, detail="Directory not found")
     vs, slug = doc["vector_store_id"], doc.get("slug", "")
     await asyncio.to_thread(delete_schema_doc, "dir", f"{vs}:{slug}")
-    return _dir_schema_response(directory_id, vs, slug)
+    return await asyncio.to_thread(_dir_schema_response, directory_id, vs, slug)
 
 
 @router.patch("/{directory_id}", response_model=DirectoryResponse)

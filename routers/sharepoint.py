@@ -440,7 +440,7 @@ async def get_sync_schema(ingestion_id: str):
     job = await asyncio.to_thread(sharepoint_jobs.find_one, {"_id": oid})
     if not job:
         raise HTTPException(status_code=404, detail="Job non trovato")
-    return _sync_schema_response(ingestion_id, job.get("vector_store_id", ""))
+    return await asyncio.to_thread(_sync_schema_response, ingestion_id, job.get("vector_store_id", ""))
 
 
 @router.put("/sharepoint/{ingestion_id}/schema")
@@ -459,7 +459,7 @@ async def put_sync_schema(ingestion_id: str, body: StoreSchemaUpdate):
         set_schema, "sync", ingestion_id, vs,
         body.entity_labels, body.relation_labels, body.relations_enabled,
     )
-    return _sync_schema_response(ingestion_id, vs)
+    return await asyncio.to_thread(_sync_schema_response, ingestion_id, vs)
 
 
 @router.delete("/sharepoint/{ingestion_id}/schema")
@@ -471,7 +471,7 @@ async def reset_sync_schema(ingestion_id: str):
         raise HTTPException(status_code=400, detail="ingestion_id non valido")
     await asyncio.to_thread(delete_schema_doc, "sync", ingestion_id)
     job = await asyncio.to_thread(sharepoint_jobs.find_one, {"_id": ObjectId(ingestion_id)})
-    return _sync_schema_response(ingestion_id, (job or {}).get("vector_store_id", ""))
+    return await asyncio.to_thread(_sync_schema_response, ingestion_id, (job or {}).get("vector_store_id", ""))
 
 
 @router.delete("/sharepoint/{ingestion_id}")
