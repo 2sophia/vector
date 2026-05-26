@@ -37,11 +37,14 @@ the gap it fills.
   See [Supported formats](#supported-formats)
 - **Knowledge graph (FalkorDB)** — every document becomes `Document → Section → Chunk` with a
   reading-order `:NEXT` chain, plus deterministic **entity extraction** (GLiNER zero-shot NER +
-  regex for IBAN / codice fiscale / P.IVA — **no LLM in ingestion**) and optional **typed
-  relations** between entities (GLiNER-relex, zero-shot, off by default)
+  high-precision regex for emails, URLs, IBAN/ISIN, amounts, dates, legal references and Italian
+  codice fiscale / P.IVA — **no LLM in ingestion**) and optional **typed relations** between
+  entities (GLiNER-relex, zero-shot, off by default)
 - **Configurable extraction schema** — the GLiNER engine is zero-shot, so *what* to extract is
   data: entity labels, relation labels and the relations toggle resolve through a
-  **file → directory → sync → store → global** cascade, editable from the UI at every level
+  **file → directory → sync → store → global** cascade, editable from the UI at every level.
+  Defaults lean **banking / legal** (financial labels, Italian regulatory references) — point them
+  at your own domain by editing the labels and thresholds
 - **Graph-augmented retrieval** — Qdrant finds the chunks, the graph expands the neighbourhood
   (chunks sharing entities + adjacent chunks), then a unified rerank. Entity expansion is
   IDF-weighted so common "stopword-entities" don't dominate
