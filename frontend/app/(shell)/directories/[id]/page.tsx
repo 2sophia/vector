@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
   CloudUpload,
   ExternalLink,
@@ -12,6 +13,7 @@ import {
   FileWarning,
   FolderTree,
   Loader2,
+  Pencil,
   Plug,
   RefreshCw,
   Search,
@@ -287,7 +289,25 @@ export default function DirectoryDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showSchema, setShowSchema] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  async function saveName() {
+    if (!dir) return;
+    const n = nameDraft.trim();
+    if (!n || n === dir.name) {
+      setEditingName(false);
+      return;
+    }
+    try {
+      await api.patch(`/directories/${dir.id}`, { name: n });
+      setDir({ ...dir, name: n });
+      setEditingName(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   // Import da sorgente
   const [sources, setSources] = useState<Source[]>([]);
@@ -563,8 +583,44 @@ export default function DirectoryDetailPage() {
         <div className="flex items-end justify-between gap-4">
           <div className="flex flex-col gap-1.5">
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <FolderTree className="size-6 text-indigo-500" />
-              {dir?.name ?? "…"}
+              <FolderTree className="size-6 shrink-0 text-indigo-500" />
+              {editingName && dir ? (
+                <span className="flex items-center gap-1.5">
+                  <Input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveName();
+                      else if (e.key === "Escape") setEditingName(false);
+                    }}
+                    className="h-9 w-64 text-xl"
+                  />
+                  <Button size="icon" variant="ghost" onClick={saveName} aria-label="Salva nome">
+                    <Check className="size-4 text-emerald-600" />
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => setEditingName(false)} aria-label="Annulla">
+                    <X className="size-4 text-zinc-500" />
+                  </Button>
+                </span>
+              ) : (
+                <>
+                  {dir?.name ?? "…"}
+                  {dir && (
+                    <button
+                      onClick={() => {
+                        setNameDraft(dir.name);
+                        setEditingName(true);
+                      }}
+                      className="text-zinc-300 transition-colors hover:text-indigo-600 dark:text-zinc-600"
+                      aria-label="Rinomina directory"
+                      title="Rinomina"
+                    >
+                      <Pencil className="size-4" />
+                    </button>
+                  )}
+                </>
+              )}
             </h1>
             <div className="flex flex-wrap items-center gap-1.5">
               {dir && (
