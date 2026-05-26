@@ -1,19 +1,26 @@
 # Sophia Vector
 
+#### OpenAI SDK Compatible Vector Store with Qdrant backend, a FalkorDB **knowledge graph**, and a management frontend.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/hero.png" alt="Sophia Vector — vector + graph, un retrieval solo" width="100%">
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/demo.gif" alt="Sophia Vector — demo (stores, ingestion, search, knowledge graph)" width="78%">
-</p>
+---
+
+### Built in Admin System
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — OpenAI-compatible API reference (Scalar)" width="92%">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/demo.gif" alt="Sophia Vector — demo (stores, ingestion, search, knowledge graph)" width="100%">
 </p>
 
-OpenAI SDK Compatible Vector Store with Qdrant backend, a FalkorDB **knowledge graph**,
-and a management frontend.
+---
+
+### OpenAI Compatible api & more
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — OpenAI-compatible API reference (Scalar)" width="100%">
+</p>
 
 ## Overview
 
@@ -84,15 +91,15 @@ Anything Docling doesn't read natively is normalized by a **pre-parser layer**
 (`utils/convert.py`) before chunking, so the same hybrid-search + graph pipeline works
 across all of these:
 
-| Category | Formats | Handling |
-|---|---|---|
-| Documents | PDF, DOCX, PPTX, XLSX, HTML/XHTML, Markdown, CSV, AsciiDoc, LaTeX | native (Docling) |
-| Legacy / OpenDocument | DOC, PPT, XLS, RTF, ODT, ODP, ODS | → OOXML via LibreOffice |
-| Email | EML, MSG | → HTML |
-| Images | PNG, JPG, TIFF, BMP, GIF, WEBP | native, **OCR** for scanned text |
-| Audio | WAV, MP3, M4A, OGG, FLAC, AAC, … | → VTT via local Whisper |
-| Video | MP4, MOV, AVI, MKV, WEBM, … | audio track → VTT via Whisper |
-| Subtitles | VTT | native |
+| Category              | Formats                                                           | Handling                         |
+|-----------------------|-------------------------------------------------------------------|----------------------------------|
+| Documents             | PDF, DOCX, PPTX, XLSX, HTML/XHTML, Markdown, CSV, AsciiDoc, LaTeX | native (Docling)                 |
+| Legacy / OpenDocument | DOC, PPT, XLS, RTF, ODT, ODP, ODS                                 | → OOXML via LibreOffice          |
+| Email                 | EML, MSG                                                          | → HTML                           |
+| Images                | PNG, JPG, TIFF, BMP, GIF, WEBP                                    | native, **OCR** for scanned text |
+| Audio                 | WAV, MP3, M4A, OGG, FLAC, AAC, …                                  | → VTT via local Whisper          |
+| Video                 | MP4, MOV, AVI, MKV, WEBM, …                                       | audio track → VTT via Whisper    |
+| Subtitles             | VTT                                                               | native                           |
 
 OCR and audio/video transcription run **in-process**, no external service, and load lazily on
 first use (like GLiNER). They default to **CPU** (no GPU required); the in-process models
@@ -181,6 +188,7 @@ which is fine for moderate volumes. To run them on a GPU, build the **GPU flavor
 ```
 
 Then point the compose service at the `-cu130` image, give it the GPU (host needs the NVIDIA driver
+
 + `nvidia-container-toolkit`), and opt the models in via env:
 
 ```yaml
@@ -189,7 +197,7 @@ image: sophiacloud/vector:0.4.0-alpha-cu130
 deploy:
   resources:
     reservations:
-      devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+      devices: [ { driver: nvidia, count: 1, capabilities: [ gpu ] } ]
 environment:
   SOPHIA_VECTOR_GLINER_DEVICE: cuda    # GLiNER + GLiNER-relex on GPU
   SOPHIA_VECTOR_ASR_DEVICE: cuda       # Whisper on GPU
@@ -204,35 +212,35 @@ All application env vars are prefixed **`SOPHIA_VECTOR_`** (the in-image default
 the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SECRET`,
 `NEXTAUTH_URL`, `MONGODB_URI`, `AUTH_DB`, `AZURE_AD_*`). See `.env.example` for the full list.
 
-| Variable                              | Default                                | Description                              |
-|---------------------------------------|----------------------------------------|------------------------------------------|
-| `SOPHIA_VECTOR_QDRANT_URL`            | `http://localhost:6333`                | Qdrant URL                               |
-| `SOPHIA_VECTOR_MONGODB_URI`           | `mongodb://localhost:27017/sophia_vector` | Mongo connection (DB in the path)     |
-| `SOPHIA_VECTOR_DOCLING_URL`           | `http://localhost:5001`                | Docling parser URL                       |
-| `SOPHIA_VECTOR_EMBEDDINGS_URL`        | `http://localhost:8004`                | BGE-M3 embeddings + rerank URL           |
-| `SOPHIA_VECTOR_SECRET_KEY`            | —                                      | Fernet key, encrypts source secrets      |
-| `SOPHIA_VECTOR_PARSER_MODEL_MAX_TOKENS` | `512`                                | Chunk size in tokens (Docling)           |
-| `SOPHIA_VECTOR_PARSER_MAX_WAIT_SECONDS` | `36000`                              | Per-doc parse timeout (≤ docling's max)  |
-| `SOPHIA_VECTOR_PARSER_USE_OCR`        | `true`                                 | OCR scanned PDFs/images (force_ocr off)  |
-| `SOPHIA_VECTOR_ASR_ENABLED`           | `true`                                 | Transcribe audio/video locally (Whisper) |
-| `SOPHIA_VECTOR_ASR_MODEL`             | `small`                                | Whisper model (tiny…large-v3)            |
-| `SOPHIA_VECTOR_ASR_MAX_AUDIO_MINUTES` | `60`                                   | Reject audio longer than this            |
-| `SOPHIA_VECTOR_ASR_MAX_VIDEO_MINUTES` | `30`                                   | Reject video longer than this            |
-| `SOPHIA_VECTOR_GRAPH_ENABLED`         | `true`                                 | Enable the FalkorDB knowledge graph      |
-| `SOPHIA_VECTOR_FALKOR_HOST`           | `localhost`                            | FalkorDB host                            |
-| `SOPHIA_VECTOR_FALKOR_PASSWORD`       | `falkordb`                             | FalkorDB password (`requirepass`)        |
-| `SOPHIA_VECTOR_FALKOR_GRAPH_PREFIX`   | _(empty)_                              | Graph-name namespace (multi-project)     |
-| `SOPHIA_VECTOR_GLINER_ENABLED`        | `false`                                | Zero-shot NER (opt-in; graph runs on regex when off) |
-| `SOPHIA_VECTOR_GLINER_MODEL`          | `gliner-community/gliner_medium-v2.5`  | GLiNER NER model (multilingual, Apache)  |
-| `SOPHIA_VECTOR_GLINER_LABELS`         | `autorità di vigilanza,organizzazione,…`| Entity labels (CSV, zero-shot; banking default) |
-| `SOPHIA_VECTOR_GLINER_DEVICE`         | `cpu`                                  | GLiNER/relex device (`cpu`/`cuda`/`auto`)|
-| `SOPHIA_VECTOR_ASR_DEVICE`            | `cpu`                                  | Whisper device (`cpu`/`cuda`/`auto`)     |
-| `SOPHIA_VECTOR_RELATIONS_ENABLED`     | `false`                                | Typed relation extraction (GLiNER-relex) |
-| `SOPHIA_VECTOR_RELATIONS_LABELS`      | `pubblicato da,emesso da,…`            | Relation labels (CSV, zero-shot default) |
-| `SOPHIA_VECTOR_CLASSIFIER_ENABLED`    | `false`                                | Zero-shot chunk classification (GliClass; opt-in, needs `pip install gliclass`) |
-| `SOPHIA_VECTOR_CLASSIFIER_LABELS`     | `antiriciclaggio,privacy e protezione dati,…` | Classification labels (CSV, zero-shot; by theme) |
-| `SOPHIA_VECTOR_CURATION_ENABLED`      | `true`                                 | Boilerplate detection + suppression      |
-| `SOPHIA_VECTOR_INTERNAL_API_URL`      | `http://127.0.0.1:8100`                | Scheduler → backend (internal)           |
+| Variable                                | Default                                       | Description                                                                     |
+|-----------------------------------------|-----------------------------------------------|---------------------------------------------------------------------------------|
+| `SOPHIA_VECTOR_QDRANT_URL`              | `http://localhost:6333`                       | Qdrant URL                                                                      |
+| `SOPHIA_VECTOR_MONGODB_URI`             | `mongodb://localhost:27017/sophia_vector`     | Mongo connection (DB in the path)                                               |
+| `SOPHIA_VECTOR_DOCLING_URL`             | `http://localhost:5001`                       | Docling parser URL                                                              |
+| `SOPHIA_VECTOR_EMBEDDINGS_URL`          | `http://localhost:8004`                       | BGE-M3 embeddings + rerank URL                                                  |
+| `SOPHIA_VECTOR_SECRET_KEY`              | —                                             | Fernet key, encrypts source secrets                                             |
+| `SOPHIA_VECTOR_PARSER_MODEL_MAX_TOKENS` | `512`                                         | Chunk size in tokens (Docling)                                                  |
+| `SOPHIA_VECTOR_PARSER_MAX_WAIT_SECONDS` | `36000`                                       | Per-doc parse timeout (≤ docling's max)                                         |
+| `SOPHIA_VECTOR_PARSER_USE_OCR`          | `true`                                        | OCR scanned PDFs/images (force_ocr off)                                         |
+| `SOPHIA_VECTOR_ASR_ENABLED`             | `true`                                        | Transcribe audio/video locally (Whisper)                                        |
+| `SOPHIA_VECTOR_ASR_MODEL`               | `small`                                       | Whisper model (tiny…large-v3)                                                   |
+| `SOPHIA_VECTOR_ASR_MAX_AUDIO_MINUTES`   | `60`                                          | Reject audio longer than this                                                   |
+| `SOPHIA_VECTOR_ASR_MAX_VIDEO_MINUTES`   | `30`                                          | Reject video longer than this                                                   |
+| `SOPHIA_VECTOR_GRAPH_ENABLED`           | `true`                                        | Enable the FalkorDB knowledge graph                                             |
+| `SOPHIA_VECTOR_FALKOR_HOST`             | `localhost`                                   | FalkorDB host                                                                   |
+| `SOPHIA_VECTOR_FALKOR_PASSWORD`         | `falkordb`                                    | FalkorDB password (`requirepass`)                                               |
+| `SOPHIA_VECTOR_FALKOR_GRAPH_PREFIX`     | _(empty)_                                     | Graph-name namespace (multi-project)                                            |
+| `SOPHIA_VECTOR_GLINER_ENABLED`          | `false`                                       | Zero-shot NER (opt-in; graph runs on regex when off)                            |
+| `SOPHIA_VECTOR_GLINER_MODEL`            | `gliner-community/gliner_medium-v2.5`         | GLiNER NER model (multilingual, Apache)                                         |
+| `SOPHIA_VECTOR_GLINER_LABELS`           | `autorità di vigilanza,organizzazione,…`      | Entity labels (CSV, zero-shot; banking default)                                 |
+| `SOPHIA_VECTOR_GLINER_DEVICE`           | `cpu`                                         | GLiNER/relex device (`cpu`/`cuda`/`auto`)                                       |
+| `SOPHIA_VECTOR_ASR_DEVICE`              | `cpu`                                         | Whisper device (`cpu`/`cuda`/`auto`)                                            |
+| `SOPHIA_VECTOR_RELATIONS_ENABLED`       | `false`                                       | Typed relation extraction (GLiNER-relex)                                        |
+| `SOPHIA_VECTOR_RELATIONS_LABELS`        | `pubblicato da,emesso da,…`                   | Relation labels (CSV, zero-shot default)                                        |
+| `SOPHIA_VECTOR_CLASSIFIER_ENABLED`      | `false`                                       | Zero-shot chunk classification (GliClass; opt-in, needs `pip install gliclass`) |
+| `SOPHIA_VECTOR_CLASSIFIER_LABELS`       | `antiriciclaggio,privacy e protezione dati,…` | Classification labels (CSV, zero-shot; by theme)                                |
+| `SOPHIA_VECTOR_CURATION_ENABLED`        | `true`                                        | Boilerplate detection + suppression                                             |
+| `SOPHIA_VECTOR_INTERNAL_API_URL`        | `http://127.0.0.1:8100`                       | Scheduler → backend (internal)                                                  |
 
 ## API Endpoints
 
