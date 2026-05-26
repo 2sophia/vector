@@ -27,8 +27,7 @@ from utils.convert import normalize_for_parser, UnsupportedFormatError
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
 from utils.falkor import write_document_graph, purge_file_graph, write_relations
-from utils.entities import extract_entities_batch, warmup as entities_warmup
-from utils.relations import extract_relations_batch
+from models import registry
 from utils.curation import body_hash, register_document_bodies, purge_file_bodies
 from utils.store_schema import get_effective_schema
 from utils.settings import CURATION_ENABLED
@@ -277,7 +276,7 @@ async def handle_job(job: Dict[str, Any]):
 
         # Entity extraction (M3, best-effort: un guasto qui non fa fallire il job)
         try:
-            chunk_entities = await asyncio.to_thread(extract_entities_batch, texts, entity_labels)
+            chunk_entities = await asyncio.to_thread(registry.ner.extract, texts, entity_labels)
         except Exception as e:
             logger.warning(f"[{tag}] entity extraction failed at batch {batch_num}: {e}")
             chunk_entities = [[] for _ in texts]
@@ -286,7 +285,7 @@ async def handle_job(job: Dict[str, Any]):
         if relations_on:
             try:
                 rel_batch = await asyncio.to_thread(
-                    extract_relations_batch, texts, entity_labels, relation_labels
+                    registry.relex.extract, texts, entity_labels, relation_labels
                 )
                 for rels in rel_batch:
                     doc_relations.extend(rels)
@@ -395,9 +394,9 @@ async def main_loop():
         f"batch_size={INGEST_BATCH_SIZE} concurrent_jobs={MAX_CONCURRENT_JOBS} poll={POLL_INTERVAL}s"
     )
 
-    # Pre-carica GLiNER (se abilitato) fuori dall'event loop: il log del device
-    # (CPU) compare subito all'avvio del worker, e il primo job non paga il load.
-    await asyncio.to_thread(entities_warmup)
+    # Pre-carica i modelli (se abilitati) fuori dall'event loop: i device finiscono
+    # subito nei log all'avvio del worker, e il primo job non paga il load.
+    await asyncio.to_thread(registry.warmup_all)
 
     while True:
         try:

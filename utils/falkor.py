@@ -368,7 +368,7 @@ def write_relations(
     """Scrive archi tipizzati (:Entity)-[:REL {type,score,files}]->(:Entity).
 
     `relations`: lista di dict {head_name, head_type, head_norm, tail_name,
-    tail_type, tail_norm, relation, score} (da utils.relations.extract_relations_batch).
+    tail_type, tail_norm, relation, score} (da models.relex RelexModel.extract).
     Aggrega per (head_id, type, tail_id) tenendo lo score massimo; i nodi :Entity
     usano lo STESSO id `"{type}::{norm}"` della NER → gli archi agganciano gli entity
     node esistenti (MERGE), non ne creano paralleli. La provenienza per-file (`files`)
