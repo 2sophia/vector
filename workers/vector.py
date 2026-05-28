@@ -28,7 +28,12 @@ from utils.convert import normalize_for_parser, UnsupportedFormatError
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
 from utils.falkor import write_document_graph, purge_file_graph, write_relations
-from models import registry
+from models.ner import NerModel
+from utils import model_client
+from utils.settings import GLINER_ENABLED, CLASSIFIER_ENABLED
+
+# Estrazione entità: i modelli PESANTI (GLiNER/relex/classifier) e Whisper vivono nel
+# BACKEND e si chiamano via model_client (HTTP) → una sola copia, nessun peso qui.
 from utils.curation import body_hash, register_document_bodies, purge_file_bodies
 from utils.store_schema import get_effective_schema
 from utils.settings import CURATION_ENABLED
@@ -354,18 +359,23 @@ async def _process_job(job: Dict[str, Any]):
             await set_job_status(job_id, "FAILED", {"error": f"Embedding error: {e}"})
             return
 
-        # Entity extraction (M3, best-effort: un guasto qui non fa fallire il job)
+        # Entity extraction (M3, best-effort). GLINER off → SOLO regex in-process (nessun
+        # modello, nessuna chiamata). GLINER on → il backend fa regex+GLiNER via HTTP (una
+        # fonte sola, niente regex duplicate). Un guasto qui non fa fallire il job.
         try:
-            chunk_entities = await asyncio.to_thread(registry.ner.extract, texts, entity_labels)
+            if GLINER_ENABLED:
+                chunk_entities = await asyncio.to_thread(model_client.ner, texts, entity_labels)
+            else:
+                chunk_entities = await asyncio.to_thread(NerModel.regex_only, texts)
         except Exception as e:
             logger.warning(f"[{tag}] entity extraction failed at batch {batch_num}: {e}")
             chunk_entities = [[] for _ in texts]
 
-        # Relation extraction (M5, opt-in dallo schema effettivo, best-effort)
+        # Relation extraction (M5, opt-in dallo schema effettivo, best-effort) → backend
         if relations_on:
             try:
                 rel_batch = await asyncio.to_thread(
-                    registry.relex.extract, texts, entity_labels, relation_labels
+                    model_client.relex, texts, entity_labels, relation_labels
                 )
                 for rels in rel_batch:
                     doc_relations.extend(rels)
@@ -373,11 +383,11 @@ async def _process_job(job: Dict[str, Any]):
                 logger.warning(f"[{tag}] relation extraction failed at batch {batch_num}: {e}")
 
         # Classificazione (GliClass zero-shot, opt-in): tag tema/tipo/sensibilità sul
-        # chunk → payload per faceting/filtri nella search. Best-effort.
+        # chunk → payload per faceting/filtri nella search. Best-effort → backend.
         chunk_categories = [[] for _ in texts]
-        if registry.classifier.enabled:
+        if CLASSIFIER_ENABLED:
             try:
-                cls_batch = await asyncio.to_thread(registry.classifier.classify, texts)
+                cls_batch = await asyncio.to_thread(model_client.classify, texts)
                 chunk_categories = [[r["label"] for r in rows] for rows in cls_batch]
             except Exception as e:
                 logger.warning(f"[{tag}] classification failed at batch {batch_num}: {e}")
@@ -496,7 +506,9 @@ async def main_loop():
 
     # Pre-carica i modelli (se abilitati) fuori dall'event loop: i device finiscono
     # subito nei log all'avvio del worker, e il primo job non paga il load.
-    await asyncio.to_thread(registry.warmup_all)
+    # I modelli pesanti (GLiNER/relex/classifier) vivono nel backend: il worker non fa più
+    # warmup né li carica — li chiama via model_client (HTTP). Le regex (in-process) sono
+    # già pronte. Niente VRAM/RAM per i modelli in questo processo.
 
     # Recupera all'avvio i job rimasti orfani in PROCESSING da un worker morto.
     await reap_stale_processing()

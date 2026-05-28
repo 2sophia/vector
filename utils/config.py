@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Sophia Vector"
-    APP_VERSION: str = "0.4.2-alpha"
+    APP_VERSION: str = "0.5.0-alpha"
     DEBUG: bool = False
 
     # --- Auth / sicurezza ---
@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     # discrimina. I temi sono ortogonali (validato: AML→antiriciclaggio, GDPR→privacy)
     # e il tipo-doc spesso lo sai già da cartella/filename. Tara questi sul tuo dominio.
     CLASSIFIER_LABELS: str = "antiriciclaggio,privacy e protezione dati,governance societaria,gestione del credito,sicurezza informatica,vigilanza e compliance,dato personale"
+
+    # --- NLP endpoints (/v1/nlp/*): tokenize, detokenize, ner, classify, relex, transcribe ---
+    # Espongono come API on-demand i modelli già nel codebase (tokenizer BGE-M3, GLiNER,
+    # GliClass, GLiNER-relex, Whisper). LAZY: un modello si carica solo al primo hit del
+    # suo endpoint → costo zero se non usati. NLP_ENABLED espone/nasconde l'intero blocco.
+    # Device: i modelli GLiNER-family vivono UNA volta sola nel backend e servono sia gli
+    # endpoint sia l'ingestion (il worker li chiama via HTTP) → un solo device, GLINER_DEVICE.
+    # Whisper sta a parte su ASR_DEVICE.
+    NLP_ENABLED: bool = True
 
     # --- Storage su disco ---
     FILES_STORAGE: str = "/app/storage/files"

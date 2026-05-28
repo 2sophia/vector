@@ -141,7 +141,8 @@ class NerModel(ModelBase):
                 break
         return out
 
-    def _regex_entities(self, text: str) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _regex_entities(text: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for etype, pattern, normalizer in _REGEX_RULES:
             for match in pattern.finditer(text):
@@ -168,6 +169,13 @@ class NerModel(ModelBase):
             if key not in best or e["score"] > best[key]["score"]:
                 best[key] = e
         return list(best.values())
+
+    @staticmethod
+    def regex_only(texts: List[str]) -> List[List[Dict[str, Any]]]:
+        """Solo le entità REGEX (zero modello), una lista allineata a `texts`. Usato dal
+        worker quando GLiNER è spento: estrazione leggera in-process, nessun peso caricato.
+        È la stessa logica regex che `extract()` applica dopo il modello."""
+        return [NerModel._dedup(NerModel._regex_entities(t)) for t in texts]
 
     def extract(
         self, texts: List[str], labels: List[str] | None = None

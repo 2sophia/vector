@@ -4,6 +4,28 @@ All notable changes to Sophia Vector are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/); the project follows
 semantic versioning (currently in the `alpha` pre-release line).
 
+## [0.5.0-alpha] — 2026-05-28
+
+### Added
+- **NLP utility endpoints** (`/v1/nlp/*`): the models already in the codebase, exposed as an on-demand
+  API — `tokenize` / `detokenize` (BGE-M3 tokenizer), `ner` (GLiNER), `classify` (GliClass),
+  `relex` (GLiNER-relex) and `transcribe` (Whisper). Lazy by design: each model loads on the first hit
+  of its endpoint, so there is zero cost when unused. Gated by `SOPHIA_VECTOR_NLP_ENABLED` (default on)
+  and protected by the same `Authorization: Bearer` API key as the rest of `/v1/*`.
+
+### Changed
+- **Single owner for the models.** The backend loads each model once, in-process, and the ingestion
+  worker — already an HTTP consumer of Docling, BGE-M3 and Qdrant — now calls those same endpoints over
+  HTTP instead of loading its own copies. One process holds the model memory; the worker holds none.
+  This also unifies audio/video transcription, which used to run inside the worker.
+- Regex-only entity extraction is now a lightweight static path (`NerModel.regex_only`), used by the
+  worker when GLiNER is disabled — no model instance, no weights loaded.
+
+### Removed
+- `SOPHIA_VECTOR_NLP_DEVICE`: with a single shared copy of the GLiNER-family models there is no second
+  instance to place on a different device. The endpoints use `GLINER_DEVICE` (Whisper stays on
+  `ASR_DEVICE`).
+
 ## [0.4.2-alpha] — 2026-05-28
 
 ### Added

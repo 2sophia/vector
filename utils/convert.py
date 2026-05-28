@@ -171,8 +171,9 @@ def _transcribe_media(src: str, out_vtt: str, is_video: bool) -> None:
     Controlla la durata con ffprobe PRIMA di trascrivere: oltre il limite il job
     fallisce con un messaggio che indica l'env da alzare — niente CPU sprecata.
     """
-    from utils.transcribe import get_duration_seconds, transcribe_to_vtt
+    from utils.transcribe import get_duration_seconds  # ffprobe: leggero, resta in-process
     from utils.settings import ASR_MAX_AUDIO_MINUTES, ASR_MAX_VIDEO_MINUTES
+    from utils import model_client
 
     limit_min = ASR_MAX_VIDEO_MINUTES if is_video else ASR_MAX_AUDIO_MINUTES
     dur = get_duration_seconds(src)
@@ -182,7 +183,11 @@ def _transcribe_media(src: str, out_vtt: str, is_video: bool) -> None:
             f"durata {dur / 60:.0f} min oltre il limite {limit_min} min — "
             f"alza SOPHIA_VECTOR_ASR_MAX_{kind}_MINUTES per file più lunghi"
         )
-    transcribe_to_vtt(src, out_vtt, is_video=is_video)
+    # Whisper vive nel backend: trascriviamo via HTTP (il worker non carica il modello).
+    # Solleva su errore → il job fallisce (la trascrizione è il contenuto del documento).
+    vtt = model_client.transcribe(src)
+    with open(out_vtt, "w", encoding="utf-8") as f:
+        f.write(vtt)
 
 
 # ---------------------------------------------------------------------------
