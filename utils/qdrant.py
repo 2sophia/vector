@@ -471,8 +471,9 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
         if point_id not in unique_results:
             unique_results[point_id] = point
 
-    # Sort per score decrescente (embedding similarity)
-    sorted_results = sorted(unique_results.values(), key=lambda x: x.score, reverse=True)
+    # Sort per score decrescente (embedding similarity). `x.score or 0.0`: difensivo
+    # contro un eventuale punto senza score (payload-only) che romperebbe il confronto.
+    sorted_results = sorted(unique_results.values(), key=lambda x: x.score or 0.0, reverse=True)
     logger.debug(f"Primo risultato: {sorted_results[0] if sorted_results else 'empty'}")
 
     # disabled rerank
@@ -667,7 +668,7 @@ def _cluster_redundant(
         try:
             d = qdrant_client.query_points(
                 collection_name=collection_name, query=pid, using="dense",
-                limit=neighbor_topk, score_threshold=dense_threshold, with_payload=False,
+                limit=neighbor_topk + 1, score_threshold=dense_threshold, with_payload=False,  # +1: il punto stesso (self-match) consuma uno slot
             ).points
         except Exception:
             continue
@@ -677,7 +678,7 @@ def _cluster_redundant(
         try:
             s = qdrant_client.query_points(
                 collection_name=collection_name, query=pid, using="sparse",
-                limit=neighbor_topk, with_payload=False,
+                limit=neighbor_topk + 1, with_payload=False,  # +1: il self-match consuma uno slot
             ).points
         except Exception:
             s = []

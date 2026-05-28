@@ -90,6 +90,12 @@ async def _execute(sch: dict) -> None:
     upd = {"last_run": started}
     if cron and croniter.is_valid(cron):
         upd["next_run"] = _next_run(cron, started)
+    else:
+        # cron invalido/vuoto: senza ricalcolo, next_run resterebbe nel passato e
+        # _tick rifarebbe la sync a OGNI tick (busy-loop che martella l'endpoint).
+        # Disabilitiamo lo schedule finché qualcuno non corregge il cron dalla UI.
+        upd["enabled"] = False
+        logger.warning(f"schedule '{stype}': cron invalido/vuoto ({cron!r}) → disabilitato")
     await asyncio.to_thread(schedules.update_one, {"_id": stype}, {"$set": upd})
 
 

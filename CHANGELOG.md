@@ -4,6 +4,40 @@ All notable changes to Sophia Vector are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/); the project follows
 semantic versioning (currently in the `alpha` pre-release line).
 
+## [0.4.1-alpha] — 2026-05-28
+
+Security and robustness hardening. A full audit of the codebase (including the older modules)
+surfaced a set of issues, fixed here. No new features — the public API surface is unchanged.
+
+### Security
+- **Path traversal fixed** on the file endpoints: `file_id` is validated against a strict whitelist
+  (`^file-[0-9a-f]{12}$`) before any filesystem access — a crafted id such as `file-../../etc/passwd`
+  can no longer read/write/delete outside the storage directory.
+- **CORS**: explicit allowlist via `SOPHIA_VECTOR_CORS_ORIGINS`; the wildcard is used only *without*
+  credentials (the invalid/unsafe `*` + credentials combination is gone).
+- **SSRF guard on SharePoint sources**: `site_url` is restricted to `https://*.sharepoint.com` and
+  `tenant_id` to a GUID / Azure domain, so a source config can't point the backend at arbitrary hosts.
+- **Optional API key** on `/v1/*` (`SOPHIA_VECTOR_API_KEY`, off by default; the frontend proxy
+  forwards it as a Bearer token). Single-tenant posture documented in `.env.example`.
+- **No secret / detail leakage**: failed decryption of stored secrets raises a typed error that never
+  contains the ciphertext; the embeddings client no longer logs response bodies or queries; Azure
+  token and SharePoint errors return generic messages (details stay in the server logs only).
+- **Admin bootstrap** can be pinned to a single `BOOTSTRAP_ADMIN_EMAIL`; unique index on user email.
+
+### Fixed
+- **The ingestion worker never strands a job in `PROCESSING`**: any unhandled error now forces
+  `FAILED`, the additive graph/curation/relation steps are truly best-effort, `asyncio.gather` is
+  failure-isolated, and a reaper re-queues jobs orphaned by a crashed worker.
+- **Atomic metadata sidecar writes** (temp file + `os.replace`): no more truncated/corrupted JSON if
+  the process dies mid-write.
+- Unhandled endpoint exceptions now return a clean `500` (no internal details) with a full
+  server-side traceback; `attach` no longer fails when a file has no recorded size.
+- `delete_vector_store` now actually removes the on-disk files (previously left orphaned).
+- The scheduler disables a schedule with an invalid/empty cron instead of busy-looping every tick.
+- Smaller hardening: constant-time API-key comparison, safe process-group signalling,
+  redundancy-cluster neighbour count, empty-text candidates skipped before rerank, and Mongo
+  attribute keys sanitised.
+
 ## [0.4.0-alpha] — 2026-05-26
 
 A large quality + product pass. The heavy ML layers become **opt-in** so the default install is

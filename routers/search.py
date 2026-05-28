@@ -174,8 +174,11 @@ def _augment(vector_store_id, query_text, direct, search_data):
         c = cand_by_id.get(cid)
         if not c:
             continue
-        key = ((c.get("payload") or {}).get("text") or "")[:200]
-        if key and key in seen_text:
+        text = ((c.get("payload") or {}).get("text") or "").strip()
+        if not text:
+            continue  # candidato senza testo (es. neighbor grafo) → non rerankabile, scarta
+        key = text[:200]
+        if key in seen_text:
             continue
         seen_text.add(key)
         candidates.append(c)

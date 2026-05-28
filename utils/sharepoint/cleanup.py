@@ -302,6 +302,11 @@ class SharePointCleanupProcessor:
         for key, value in (self._config.attributes or {}).items():
             if key in RESERVED_ATTR_KEYS:
                 continue
+            # la chiave diventa un field name Mongo (attributes.<key>): salta quelle
+            # con '.' (path annidato) o '$' (operatore) → non sono attributi reali.
+            if "." in key or key.startswith("$"):
+                logger.warning(f"attributo con chiave non sicura ignorato nel match: {key!r}")
+                continue
             query[f"attributes.{key}"] = value
 
         cursor = ingestion_jobs.find(query).batch_size(BATCH_SIZE)

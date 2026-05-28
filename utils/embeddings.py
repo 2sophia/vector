@@ -1,22 +1,20 @@
 import requests
+import traceback
 from typing import List, Tuple, Dict, Any
 from qdrant_client.models import SparseVector
 
-import logging
-import traceback
 from .settings import BGE_M3_URL
+from utils.logger import get_logger
 
-from dotenv import load_dotenv
-load_dotenv()
+# Logger standard del progetto: rispetta il livello globale (INFO in prod) invece
+# di forzare DEBUG con un handler manuale, che stampava in chiaro response body e
+# query/testi dei documenti anche in produzione.
+logger = get_logger(__name__)
 
-# Logger configurato
-logger = logging.getLogger("bge-m3")
-logger.setLevel(logging.DEBUG)
-
-if not logger.handlers:
-    h = logging.StreamHandler()
-    h.setLevel(logging.DEBUG)
-    logger.addHandler(h)
+# Sessione HTTP riusata: keep-alive verso il servizio BGE-M3 invece di aprire una
+# nuova connessione TCP a ogni batch (sotto ingestion sono migliaia → overhead e
+# rischio di esaurire le porte effimere).
+_session = requests.Session()
 
 
 def _log_request_error(err: Exception, url: str, extra: Dict[str, Any] | None = None):
@@ -60,9 +58,8 @@ def get_bge_embeddings(
     )
 
     try:
-        resp = requests.post(url, json=payload, timeout=120)
+        resp = _session.post(url, json=payload, timeout=120)
         logger.debug(f"[BGE EMBEDDINGS][RESPONSE STATUS] {resp.status_code}")
-        logger.debug(f"[BGE EMBEDDINGS][RESPONSE BODY] {resp.text[:1000]}")
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -119,14 +116,13 @@ def get_bge_reranking_docs(query: str, documents: List[str], weights=None) -> Li
     )
 
     try:
-        resp = requests.post(url, json=payload, timeout=120)
+        resp = _session.post(url, json=payload, timeout=120)
         logger.debug(f"[BGE RERANK][RESPONSE STATUS] {resp.status_code}")
-        logger.debug(f"[BGE RERANK][RESPONSE BODY] {resp.text[:1000]}")
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
         _log_request_error(
-            e, url, extra={"num_documents": len(documents), "query_preview": query[:200]}
+            e, url, extra={"num_documents": len(documents)}
         )
         raise
 

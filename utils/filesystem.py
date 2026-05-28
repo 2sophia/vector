@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import glob
 from typing import Callable, Optional
 
@@ -11,6 +12,29 @@ import aiofiles
 from slugify import slugify
 
 from utils import FILES_STORAGE, get_timestamp, generate_id
+
+
+# file_id = generate_id("file-") = "file-" + 12 hex (uuid4().hex[:12]). Il file_id
+# finisce concatenato in un path su disco (open/read/write/delete/glob): una
+# whitelist STRETTA è l'unica difesa robusta contro il path traversal — qualsiasi
+# forma inattesa (slash, "..", separatori, null byte) viene rifiutata a monte.
+_FILE_ID_RE = re.compile(r"^file-[0-9a-f]{12}$")
+
+
+def is_valid_file_id(file_id: str) -> bool:
+    """True solo se file_id ha il formato generato da generate_id('file-')."""
+    return isinstance(file_id, str) and _FILE_ID_RE.match(file_id) is not None
+
+
+async def write_json_atomic(path: str, data) -> None:
+    """Scrive un JSON in modo atomico: serializza su un tmp nella stessa directory,
+    poi os.replace (atomico su POSIX). Evita i sidecar troncati/corrotti se il
+    processo muore a metà scrittura — un lettore concorrente vede o il vecchio
+    contenuto o il nuovo, mai un file a metà che farebbe esplodere json.loads."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    async with aiofiles.open(tmp, "w") as f:
+        await f.write(json.dumps(data))
+    await asyncio.to_thread(os.replace, tmp, path)
 
 
 def _sha256_file(path: str) -> str:
@@ -24,6 +48,8 @@ def _sha256_file(path: str) -> str:
 
 def _find_file_path(file_id: str) -> str | None:
     """Trova il file su disco (con qualsiasi estensione)."""
+    if not is_valid_file_id(file_id):
+        return None
     pattern = os.path.join(FILES_STORAGE, f"{file_id}.*")
     matches = [f for f in glob.glob(pattern) if not f.endswith("_metadata.json")]
     return matches[0] if matches else None
@@ -31,6 +57,8 @@ def _find_file_path(file_id: str) -> str | None:
 
 async def get_file_metadata(file_id: str) -> dict | None:
     """Legge i metadata di un file."""
+    if not is_valid_file_id(file_id):
+        return None
     metadata_path = os.path.join(FILES_STORAGE, f"{file_id}_metadata.json")
     if not os.path.exists(metadata_path):
         return None
@@ -53,6 +81,8 @@ async def get_file_path(file_id: str) -> str | None:
 
 async def delete_file_from_disk(file_id: str) -> bool:
     """Cancella file e metadata dal disco. Ritorna True se cancellato."""
+    if not is_valid_file_id(file_id):
+        return False
     file_path = await get_file_path(file_id)
     metadata_path = os.path.join(FILES_STORAGE, f"{file_id}_metadata.json")
 
@@ -120,8 +150,7 @@ async def store_file_on_disk(
     }
 
     metadata_path = os.path.join(FILES_STORAGE, f"{file_id}_metadata.json")
-    async with aiofiles.open(metadata_path, "w") as f:
-        await f.write(json.dumps(file_metadata))
+    await write_json_atomic(metadata_path, file_metadata)
 
     return file_metadata
 

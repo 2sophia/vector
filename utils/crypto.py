@@ -15,7 +15,7 @@ import base64
 import hashlib
 import logging
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from utils.config import settings
 
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 _DEV_FALLBACK_KEY = "sophia-vector-dev-insecure-key"
 _warned = False
+
+
+class SecretDecryptionError(Exception):
+    """Il secret cifrato non è decifrabile con la SECRET_KEY corrente (chiave
+    cambiata/ruotata o dato corrotto). Il messaggio NON contiene mai il ciphertext."""
 
 
 def _get_fernet() -> Fernet:
@@ -48,7 +53,23 @@ def encrypt_secret(plaintext: str) -> str:
 
 
 def decrypt_secret(ciphertext: str) -> str:
-    """Decifra una stringa prodotta da encrypt_secret. Vuota → vuota."""
+    """Decifra una stringa prodotta da encrypt_secret. Vuota → vuota.
+
+    Solleva SecretDecryptionError (mai il ciphertext nel messaggio) se il dato non
+    è decifrabile: tipicamente la SECRET_KEY è cambiata rispetto a quando il secret
+    è stato cifrato. I chiamanti la catturano per chiedere il re-inserimento delle
+    credenziali invece di propagare un 500 nudo o mandare il worker in errore ciclico.
+    """
     if not ciphertext:
         return ""
-    return _get_fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
+    try:
+        return _get_fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError, TypeError) as e:
+        logger.warning(
+            "decrypt_secret: secret non decifrabile (SECRET_KEY cambiata o dato corrotto): %s",
+            type(e).__name__,
+        )
+        raise SecretDecryptionError(
+            "Impossibile decifrare il secret della source: la chiave di cifratura è "
+            "cambiata o il dato è corrotto. Re-inserisci le credenziali della source."
+        ) from None

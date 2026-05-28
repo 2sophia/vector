@@ -4,7 +4,8 @@ import re
 import time
 import requests
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, Field
+from urllib.parse import urlparse
+from pydantic import BaseModel, Field, field_validator
 from fastapi import HTTPException
 from enum import Enum
 
@@ -77,12 +78,41 @@ class IngestStatusResponse(BaseModel):
     total_size: int
 
 
+_TENANT_GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# dominio Azure (es. contoso.onmicrosoft.com): label alfanumeriche separate da punto,
+# niente slash/spazi/'..'/'@' → impedisce path injection nell'URL del token.
+_TENANT_DOMAIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)+")
+
+
 class SharePointAuth(BaseModel):
     """Configurazione per autenticazione SharePoint via Graph API"""
     site_url: str
     client_id: str
     client_secret: str
     tenant_id: str  # Obbligatorio per Graph API
+
+    @field_validator("tenant_id")
+    @classmethod
+    def _validate_tenant_id(cls, v: str) -> str:
+        # tenant_id finisce nel PATH del token URL (login.microsoftonline.com/{tenant}/...):
+        # deve essere un GUID o un dominio Azure, MAI contenere '/', '..', '@' o spazi
+        # → anti-SSRF / path injection.
+        v = (v or "").strip()
+        if not _TENANT_GUID_RE.fullmatch(v) and not _TENANT_DOMAIN_RE.fullmatch(v):
+            raise ValueError("tenant_id deve essere un GUID o un dominio Azure (es. contoso.onmicrosoft.com)")
+        return v
+
+    @field_validator("site_url")
+    @classmethod
+    def _validate_site_url(cls, v: str) -> str:
+        # site_url guida le chiamate Graph: enforce https + host *.sharepoint.com così il
+        # backend non può essere puntato a host arbitrari (SSRF: metadata cloud, servizi interni).
+        v = (v or "").strip()
+        parsed = urlparse(v)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not (host == "sharepoint.com" or host.endswith(".sharepoint.com")):
+            raise ValueError("site_url deve essere un URL https su un host *.sharepoint.com")
+        return v
 
 
 class FolderConfig(BaseModel):
@@ -208,10 +238,12 @@ class GraphAPIClient:
             logger.info("✓ Access token obtained successfully")
             return self.token
         else:
-            logger.error(f"Failed to get token: {response.status_code} - {response.text}")
+            # Non esporre response.text al client né nei log: il body di errore del
+            # token endpoint può contenere dettagli AADSTS/correlation. Status + msg generico.
+            logger.error(f"Azure AD token request failed: status {response.status_code}")
             raise HTTPException(
                 status_code=401,
-                detail=f"Failed to authenticate with Azure AD: {response.text}"
+                detail="Failed to authenticate with Azure AD (verifica le credenziali della source)",
             )
 
     def _retry_delay(self, attempt: int, response: Optional[requests.Response]) -> float:
@@ -509,7 +541,10 @@ class GraphAPIClient:
 # ================== AUTH RESOLUTION ==================
 
 def default_env_auth() -> SharePointAuth:
-    """Credenziali SharePoint globali da env (fallback legacy / source di default)."""
+    """Credenziali SharePoint globali da env (fallback legacy). Usato solo quando un
+    job NON ha source_id: logga un warning perché in un setup multi-source significa
+    autenticare con le credenziali globali invece che con quelle della source."""
+    logger.warning("SharePoint: uso credenziali legacy da env AZURE_* (job senza source_id)")
     return SharePointAuth(
         site_url=AZURE_SITE_URL,
         tenant_id=AZURE_TENANT_ID,
@@ -651,6 +686,11 @@ class SharePointProcessor:
         for key, value in (self.config.attributes or {}).items():
             if key in RESERVED_ATTR_KEYS:
                 continue
+            # la chiave diventa un field name Mongo (attributes.<key>): una con '.'
+            # creerebbe un path annidato non voluto, una con '$' un operatore → salta.
+            if "." in key or key.startswith("$"):
+                logger.warning(f"attributo con chiave non sicura ignorato nel match: {key!r}")
+                continue
             query[f"attributes.{key}"] = value
 
         results = ingestion_jobs.find_one(query)
@@ -699,6 +739,11 @@ class SharePointProcessor:
         # Restringi alla stessa "directory"/attributi della source
         for key, value in (self.config.attributes or {}).items():
             if key in RESERVED_ATTR_KEYS:
+                continue
+            # la chiave diventa un field name Mongo (attributes.<key>): una con '.'
+            # creerebbe un path annidato non voluto, una con '$' un operatore → salta.
+            if "." in key or key.startswith("$"):
+                logger.warning(f"attributo con chiave non sicura ignorato nel match: {key!r}")
                 continue
             query[f"attributes.{key}"] = value
 

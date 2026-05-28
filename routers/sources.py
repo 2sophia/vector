@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from utils import get_logger, get_timestamp, generate_id
 from utils.database import db
-from utils.crypto import encrypt_secret
+from utils.crypto import encrypt_secret, SecretDecryptionError
 from utils.schemas import SourceCreate, SourceUpdate, SourceResponse
 from utils.sources import get_provider, list_providers
 
@@ -121,9 +121,12 @@ async def browse_source(
         return await asyncio.to_thread(provider.browse, doc.get("config") or {}, drive_id, folder_id)
     except NotImplementedError as e:
         raise HTTPException(status_code=501, detail=str(e))
+    except SecretDecryptionError as e:
+        # messaggio sicuro (nessun secret) → 409: l'operatore deve re-inserire le credenziali
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"browse_source({source_id}) failed: {e}")
-        raise HTTPException(status_code=502, detail=f"Browse failed: {e}")
+        raise HTTPException(status_code=502, detail="Browse failed (vedi log del server)")
 
 
 @router.patch("/{source_id}", response_model=SourceResponse)

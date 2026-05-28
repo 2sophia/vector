@@ -10,10 +10,13 @@ stop_event = asyncio.Event()
 
 
 def _killpg_safe(pid: int, sig: int) -> None:
-    """Manda un segnale al process group, ignorando errori se già morto."""
+    """Manda un segnale al process group del pid, ignorando errori se già morto.
+    Deriva il PGID con getpgid invece di assumere pgid==pid: l'assunzione regge solo
+    finché i worker partono con start_new_session, e un domani senza quel flag
+    killpg(pid) colpirebbe il gruppo del backend stesso (auto-kill)."""
     try:
-        os.killpg(pid, sig)
-    except ProcessLookupError:
+        os.killpg(os.getpgid(pid), sig)
+    except (ProcessLookupError, OSError):
         pass
     except Exception:
         pass

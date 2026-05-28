@@ -31,6 +31,12 @@ async function proxyRequest(
   const userId = (session.user as Record<string, unknown>).id as string;
   headers.set("x-user-id", userId);
 
+  // Inoltra l'API key al backend se configurata (deve combaciare con
+  // SOPHIA_VECTOR_API_KEY). Vuota = backend senza controllo (rete fidata).
+  if (process.env.BACKEND_API_KEY) {
+    headers.set("authorization", `Bearer ${process.env.BACKEND_API_KEY}`);
+  }
+
   // Forward body for non-GET
   let body: ArrayBuffer | null = null;
   if (request.method !== "GET" && request.method !== "HEAD") {

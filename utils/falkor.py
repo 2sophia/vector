@@ -102,6 +102,9 @@ def purge_file_graph(vector_store_id: str, file_id: str) -> None:
             {"fid": file_id},
         )
         g.query("MATCH ()-[r:REL]->() WHERE r.files IS NULL OR size(r.files) = 0 DELETE r")
+        # NB: le due query orfani qui sotto scandiscono l'INTERO grafo dello store, non
+        # solo il file → costo O(grafo) per ogni file ingerito. Accettabile sui corpus
+        # attuali; se il grafo crescesse molto, limitare lo scope alle entità toccate.
         # entità rimaste senza menzioni NÉ relazioni → orfane, si rimuovono
         g.query("MATCH (e:Entity) WHERE NOT (e)<-[:MENTIONS]-() AND NOT (e)-[:REL]-() DELETE e")
         # nodi :Content (curation) rimasti senza chunk → orfani, si rimuovono

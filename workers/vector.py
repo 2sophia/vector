@@ -133,6 +133,34 @@ async def set_job_status(job_id, status: str, extra: Dict[str, Any] | None = Non
     await asyncio.to_thread(_update)
 
 
+# Reaper: un job PROCESSING che non avanza da oltre questo intervallo è orfano
+# (worker crashato/killato a metà → resterebbe PROCESSING per sempre, mai
+# ri-claimato perché claim cerca solo PENDING). Soglia ALTA di proposito: un job
+# legittimo può durare a lungo (Docling fino a ~30 min sui PDF tabellari, ASR su
+# video) → meglio aspettare che rubare un job ancora vivo. updated_at è settato al
+# claim e a ogni cambio stato.
+STALE_PROCESSING_SECONDS = 3600
+
+
+async def reap_stale_processing() -> None:
+    """Rimette PENDING i job rimasti orfani in PROCESSING oltre la soglia, così
+    vengono ri-elaborati. Best-effort: un errore qui non deve fermare il worker."""
+    cutoff = get_timestamp() - STALE_PROCESSING_SECONDS
+
+    def _reap():
+        return jobs_coll.update_many(
+            {"status": "PROCESSING", "updated_at": {"$lt": cutoff}},
+            {"$set": {"status": "PENDING", "updated_at": get_timestamp()}},
+        )
+
+    try:
+        res = await asyncio.to_thread(_reap)
+        if getattr(res, "modified_count", 0):
+            logger.warning(f"♻️ reaper: {res.modified_count} job orfani in PROCESSING rimessi PENDING")
+    except Exception as e:
+        logger.warning(f"reaper job PROCESSING orfani fallito: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Qdrant helpers
 # ---------------------------------------------------------------------------
@@ -179,6 +207,21 @@ async def cleanup_superseded(job: Dict[str, Any], collection_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def handle_job(job: Dict[str, Any]):
+    """Safety-net attorno a _process_job: qualunque eccezione NON prevista forza il
+    job a FAILED, così non resta MAI orfano in PROCESSING. Gli errori attesi (file
+    rotto, conversione, chunking, embedding, upsert) sono già gestiti a valle."""
+    job_id = job.get("_id")
+    try:
+        await _process_job(job)
+    except Exception as e:
+        logger.exception(f"[{job_id}] errore non gestito → FAILED: {e}")
+        try:
+            await set_job_status(job_id, "FAILED", {"error": f"unhandled: {e}"})
+        except Exception:
+            logger.exception(f"[{job_id}] impossibile marcare FAILED dopo errore non gestito")
+
+
+async def _process_job(job: Dict[str, Any]):
     job_id = job["_id"]
     tag = str(job_id)
     file_id = job["file_id"]
@@ -398,31 +441,36 @@ async def handle_job(job: Dict[str, Any]):
         total_indexed += len(docs)
         logger.info(f"[{tag}] Batch {batch_num}: {len(docs)} points indexed ({total_indexed}/{len(chunks)})")
 
-    # 3) Grafo strutturale (best-effort, additivo: un guasto qui NON fa fallire
-    # il job, i punti Qdrant sono già scritti). Scrive doc→sezioni→chunk con il
-    # qdrant_point_id come ponte.
-    slug = attributes.get("sophia_directory_slug")
-    await asyncio.to_thread(
-        write_document_graph,
-        vector_store_id,
-        file_id,
-        job["filename"],
-        slug,
-        job.get("content_hash"),
-        get_timestamp(),
-        graph_chunks,
-    )
-
-    # 3b) Provenienza curation: registra in quali documenti compare ogni body
-    # (fonte di verità per la soppressione boilerplate a search-time). Best-effort.
-    if CURATION_ENABLED and doc_body_hashes:
+    # 3) Layer additivi (grafo strutturale, provenienza curation, relazioni
+    # tipizzate). best-effort REALE: i punti Qdrant sono GIÀ scritti → il documento
+    # è ricercabile, un guasto qui NON deve far fallire il job. Avvolti insieme:
+    # prima questo blocco non era protetto e un'eccezione (FalkorDB giù, ecc.)
+    # lasciava il job orfano in PROCESSING nonostante l'indicizzazione riuscita.
+    try:
+        slug = attributes.get("sophia_directory_slug")
         await asyncio.to_thread(
-            register_document_bodies, vector_store_id, file_id, list(doc_body_hashes)
+            write_document_graph,
+            vector_store_id,
+            file_id,
+            job["filename"],
+            slug,
+            job.get("content_hash"),
+            get_timestamp(),
+            graph_chunks,
         )
 
-    # 3c) Relazioni tipizzate (M5, additivo, best-effort): archi :REL tra entità.
-    if relations_on and doc_relations:
-        await asyncio.to_thread(write_relations, vector_store_id, file_id, doc_relations)
+        # 3b) Provenienza curation: registra in quali documenti compare ogni body
+        # (fonte di verità per la soppressione boilerplate a search-time).
+        if CURATION_ENABLED and doc_body_hashes:
+            await asyncio.to_thread(
+                register_document_bodies, vector_store_id, file_id, list(doc_body_hashes)
+            )
+
+        # 3c) Relazioni tipizzate (M5): archi :REL tra entità.
+        if relations_on and doc_relations:
+            await asyncio.to_thread(write_relations, vector_store_id, file_id, doc_relations)
+    except Exception as e:
+        logger.warning(f"[{tag}] layer additivi (grafo/curation/relazioni) falliti, proseguo verso COMPLETED: {e}")
 
     # 4) Completato — ora che i nuovi chunk sono indicizzati, rimuovi i vecchi
     # file sostituiti (re-ingest sicuro: solo dopo il successo).
@@ -446,6 +494,9 @@ async def main_loop():
     # subito nei log all'avvio del worker, e il primo job non paga il load.
     await asyncio.to_thread(registry.warmup_all)
 
+    # Recupera all'avvio i job rimasti orfani in PROCESSING da un worker morto.
+    await reap_stale_processing()
+
     while True:
         try:
             jobs = await claim_pending_jobs(MAX_CONCURRENT_JOBS)
@@ -453,7 +504,12 @@ async def main_loop():
             if jobs:
                 logger.info(f"🔎 Claimed {len(jobs)} job(s), processing...")
                 tasks = [asyncio.create_task(handle_job(job)) for job in jobs]
-                await asyncio.gather(*tasks)
+                # return_exceptions=True: un task che esplodesse (non dovrebbe — il
+                # safety-net di handle_job cattura tutto) NON aborta gli altri.
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, Exception):
+                        logger.error(f"⚠️ task handle_job ha sollevato (inatteso): {r}")
                 continue  # subito al prossimo poll se c'è ancora coda
 
         except Exception as e:
@@ -461,7 +517,8 @@ async def main_loop():
             await asyncio.sleep(5.0)
             continue
 
-        # Coda vuota → clear finale di fine batch (best-effort), poi poll lento
+        # Coda vuota → recupero orfani + clear finale di fine batch, poi poll lento
+        await reap_stale_processing()
         _maybe_clear_docling(force=True)
         await asyncio.sleep(POLL_INTERVAL)
 

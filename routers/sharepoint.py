@@ -386,7 +386,7 @@ async def sharepoint_ingest(config: IngestConfig):
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process SharePoint: {str(e)}",
+            detail="Failed to process SharePoint ingest (vedi log del server)",
         )
 
 
@@ -576,5 +576,5 @@ async def get_sharepoint_ingest_status(ingestion_id: str):
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get SharePoint ingest status: {str(e)}",
+            detail="Failed to get SharePoint ingest status (vedi log del server)",
         )

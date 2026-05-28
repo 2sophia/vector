@@ -1,7 +1,7 @@
 import sys
 import asyncio
 from fastapi import FastAPI
-from fastapi import Request
+from fastapi import Request, Depends
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import HTTPException
@@ -21,6 +21,7 @@ from routers import (
 )
 
 from utils.worker import watch_process, stop_event, worker_procs, terminate_worker_group
+from utils.auth import require_api_key
 
 logger = get_logger(__name__)
 
@@ -80,27 +81,44 @@ app = FastAPI(
     redoc_url=None,
 )
 
+# CORS: allowlist esplicita via SOPHIA_VECTOR_CORS_ORIGINS (csv). Wildcard "*" +
+# credentials è una combo invalida/insicura (i browser la rifiutano, Starlette la
+# rifletterebbe): se nessuna origin è configurata ricadiamo su "*" SENZA credentials.
+# Il backend non usa cookie cross-origin — l'identità utente passa da x-user-id
+# iniettato server-side dal proxy Next, non da credenziali CORS.
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(sharepoint_router)
-app.include_router(vector_stores_router)
-app.include_router(files_router)
-app.include_router(search_router)
-app.include_router(sources_router)
-app.include_router(directories_router)
-app.include_router(schedules_router)
+# Routers — protetti dall'API key opzionale (no-op se SOPHIA_VECTOR_API_KEY è vuota).
+# /, /health, /docs e /openapi.json restano liberi (definiti direttamente su app).
+_v1 = [Depends(require_api_key)]
+app.include_router(sharepoint_router, dependencies=_v1)
+app.include_router(vector_stores_router, dependencies=_v1)
+app.include_router(files_router, dependencies=_v1)
+app.include_router(search_router, dependencies=_v1)
+app.include_router(sources_router, dependencies=_v1)
+app.include_router(directories_router, dependencies=_v1)
+app.include_router(schedules_router, dependencies=_v1)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     print(f"❌ {request.method} {request.url.path} -> {exc.status_code}: {exc.detail}")
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Rete di sicurezza per gli endpoint senza try/except: qualunque eccezione non
+    gestita diventa un 500 PULITO (niente str(exc) al client → nessun leak di
+    dettagli interni) con il traceback completo nei log server-side."""
+    logger.exception(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get("/", include_in_schema=False)

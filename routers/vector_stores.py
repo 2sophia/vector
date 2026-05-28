@@ -12,7 +12,7 @@ from fastapi import HTTPException, Query, APIRouter
 
 from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
-from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk
+from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_disk, is_valid_file_id, write_json_atomic, _find_file_path
 from utils.qdrant import (
     create_qdrant_collection, delete_qdrant_points,
     find_redundant_clusters, mark_redundant, unmark_redundant,
@@ -106,8 +106,7 @@ async def create_vector_store(store_data: VectorStoreCreate):
 
         # Save metadata to file (since Qdrant doesn't store collection metadata)
         metadata_path = os.path.join(FILES_STORAGE, f"{store_id}_metadata.json")
-        async with aiofiles.open(metadata_path, 'w') as f:
-            await f.write(json.dumps(collection_info))
+        await write_json_atomic(metadata_path, collection_info)
 
         return VectorStore(
             id=store_id,
@@ -271,8 +270,7 @@ async def update_vector_store(vector_store_id: str, body: VectorStoreUpdate):
     if body.metadata is not None:
         meta["metadata"] = body.metadata
 
-    async with aiofiles.open(metadata_path, "w") as f:
-        await f.write(json.dumps(meta))
+    await write_json_atomic(metadata_path, meta)
 
     point_count = 0
     try:
@@ -479,13 +477,17 @@ def delete_vector_store(vector_store_id: str):
         # --- Delete all related files + file metadata on disk ---
         deleted_files = []
         for file_id in file_ids_to_delete:
-            file_path = os.path.join(FILES_STORAGE, file_id)
+            # I file su disco sono salvati come {file_id}{ext}: un join nudo su file_id
+            # (senza estensione) non matcherebbe MAI → file orfani a ogni delete dello
+            # store. _find_file_path trova il file con la sua estensione reale (e valida
+            # il file_id contro il path traversal).
+            file_path = _find_file_path(file_id)
             file_metadata_path = os.path.join(FILES_STORAGE, f"{file_id}_metadata.json")
 
             file_deleted = False
             file_metadata_deleted = False
 
-            if os.path.exists(file_path):
+            if file_path and os.path.exists(file_path):
                 os.remove(file_path)
                 file_deleted = True
 
@@ -681,7 +683,7 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
             return VectorStoreFile(
                 job_id=str(job["_id"]),
                 id=job["file_id"],
-                usage_bytes=job.get("file_size", 0),
+                usage_bytes=job.get("file_size") or 0,
                 created_at=job.get("created_at", get_timestamp()),
                 vector_store_id=vector_store_id,
                 status=job.get("status", "COMPLETED"),
@@ -689,6 +691,10 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
             )
 
     # Vecchi job dello stesso file logico (nome): da rimuovere a ingest COMPLETED.
+    # NB: supersedes è calcolato qui alla creazione. Due attach concorrenti dello
+    # STESSO filename potrebbero non vedersi a vicenda, ma il worker serializza
+    # (INGEST_MAX_CONCURRENT_JOBS=1 + claim atomico) → niente cancellazione incrociata
+    # dei punti. Con più worker servirebbe un lock per (vector_store_id, filename).
     supersedes = [
         j["file_id"] for j in existing
         if j.get("file_id") and j["file_id"] != file_data.file_id
@@ -700,7 +706,7 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
         "vector_store_id": vector_store_id,
         "file_id": file_data.file_id,
         "filename": filename,
-        "file_size": file_metadata.get("bytes"),
+        "file_size": file_metadata.get("bytes") or 0,
         "content_hash": content_hash,
         "attributes": attributes,
         "supersedes_file_ids": supersedes,
@@ -720,8 +726,8 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
 
     return VectorStoreFile(
         job_id=job_id,
-        id=file_data.file_id,  # che cazzo metti il vs ?=?????
-        usage_bytes=file_metadata.get("bytes"),
+        id=file_data.file_id,
+        usage_bytes=file_metadata.get("bytes") or 0,
         created_at=get_timestamp(),
         vector_store_id=vector_store_id,
         status="PENDING",
@@ -733,7 +739,7 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
 async def get_vector_store_file(vector_store_id: str, file_id: str):
     """Download file content and chunks with paginate"""
     try:
-        if not file_id.startswith("file-"):
+        if not is_valid_file_id(file_id):
             raise HTTPException(status_code=404, detail="File not found")
 
         file_path = os.path.join(FILES_STORAGE, file_id)

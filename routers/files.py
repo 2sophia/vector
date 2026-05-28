@@ -19,6 +19,7 @@ from utils.filesystem import (
     get_file_metadata,
     get_file_path,
     list_files_on_disk,
+    is_valid_file_id,
 )
 
 logger = get_logger(__name__)
@@ -105,7 +106,7 @@ async def supported_formats():
 async def get_file(file_id: str):
     """Get file info"""
     try:
-        if not file_id.startswith("file-"):
+        if not is_valid_file_id(file_id):
             raise HTTPException(status_code=404, detail="File not found")
 
         metadata = await get_file_metadata(file_id)
@@ -129,7 +130,7 @@ async def get_file_content(file_id: str, inline: bool = False):
     (utile per PDF/immagini/HTML); altrimenti attachment (download).
     """
     try:
-        if not file_id.startswith("file-"):
+        if not is_valid_file_id(file_id):
             raise HTTPException(status_code=404, detail="File not found")
 
         metadata = await get_file_metadata(file_id)
@@ -162,13 +163,15 @@ async def get_file_content(file_id: str, inline: bool = False):
 async def delete_file(file_id: str):
     """Delete a file"""
     try:
-        if not file_id.startswith("file-"):
+        if not is_valid_file_id(file_id):
             raise HTTPException(status_code=404, detail="File not found")
 
         deleted = await delete_file_from_disk(file_id)
 
         return {"id": file_id, "object": "file", "deleted": deleted}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Failed to delete file: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
