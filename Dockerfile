@@ -65,6 +65,7 @@ COPY main.py .
 COPY routers/ ./routers/
 COPY utils/ ./utils/
 COPY workers/ ./workers/
+COPY models/ ./models/
 
 # Frontend standalone build
 COPY --from=frontend-builder /build/.next/standalone/ ./frontend/
