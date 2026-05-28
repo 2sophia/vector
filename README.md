@@ -34,25 +34,34 @@
 
 Published on Docker Hub: **[`sophiacloud/vector`](https://hub.docker.com/r/sophiacloud/vector)** (backend **and** frontend in one image, multi-arch amd64/arm64).
 
+The service URLs (Qdrant, Docling, BGE-M3, FalkorDB, MongoDB) are **baked to the docker-compose
+service names** inside the image, so with the bundled Compose stack you only need to set the
+**secrets**:
+
 ```bash
 docker run -d --name sophia-vector \
   -p 8100:8100 -p 3100:3100 \
-  -e SOPHIA_VECTOR_QDRANT_URL=http://qdrant:6333 \
-  -e SOPHIA_VECTOR_MONGODB_URI=mongodb://mongo:27017 \
-  -e SOPHIA_VECTOR_DOCLING_URL=http://parser:5001 \
-  -e SOPHIA_VECTOR_EMBEDDINGS_URL=http://embeddings:8004 \
-  -e NEXTAUTH_SECRET=change-me \
-  -e SOPHIA_VECTOR_SECRET_KEY=change-me \
+  -e SOPHIA_VECTOR_SECRET_KEY=<32+ random chars> \      # encrypts ingestion-source credentials
+  -e NEXTAUTH_SECRET=<32+ random chars> \               # signs login sessions
+  -e NEXTAUTH_URL=https://vector.yourbank.internal \    # public URL of the frontend
   -v sophia_vector_data:/app/storage \
   sophiacloud/vector:0.6.0-alpha --frontend
 ```
 
+**Recommended for a protected deployment:** also set `SOPHIA_VECTOR_API_KEY` + `BACKEND_API_KEY`
+(same value — gates `/v1/*` with a Bearer token, the frontend proxy forwards it) and
+`BOOTSTRAP_ADMIN_EMAIL` (only that email can become the first admin, closing the takeover window).
+
 - **API** on `:8100` (OpenAI-compatible `/v1/*`), **management UI** on `:3100` (first login becomes admin)
 - `--frontend` starts the UI too; drop it to run the backend only
-- Needs **Qdrant**, **MongoDB**, **Docling** and a **BGE-M3** endpoint reachable — the whole stack is wired up in [`docker-compose.yml`](docker-compose.yml) (recommended: `docker compose up -d`)
+- Service URLs default to the compose names (`qdrant`/`parser`/`embeddings`/`falkordb`/`mongodb`) —
+  override the matching `SOPHIA_VECTOR_*_URL` / `MONGODB_URI` env **only if your hosts differ**
+- Needs **Qdrant**, **MongoDB**, **Docling** and a **BGE-M3** endpoint reachable — the whole stack is
+  wired up in [`docker-compose.yml`](docker-compose.yml) (recommended: `docker compose up -d`)
 - GPU build available as `sophiacloud/vector:0.6.0-alpha-cu130` (see [GPU acceleration](#gpu-acceleration-optional))
 
-> Full env reference in [Configuration](#configuration). For a one-command local stack use Compose; the bare `docker run` above is the minimal shape.
+> Full env reference in [Configuration](#configuration). Use Compose for a one-command stack; the
+> `docker run` above is the minimal secrets-only shape.
 
 ## Overview
 
