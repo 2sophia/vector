@@ -10,9 +10,15 @@
 #                     tag sophiacloud/vector:<versione>-cu130
 #                     (richiede host con GPU + nvidia-container-toolkit a runtime)
 set -euo pipefail
+cd "$(dirname "$0")"
 
-VERSION="${1:-0.5.0-alpha}"
+# Default = APP_VERSION dichiarata in utils/config.py (fonte di verità della versione).
+# Override esplicito con il 1° argomento. Così un push senza argomenti non resta indietro.
+CONFIG_VERSION="$(grep -oP 'APP_VERSION:\s*str\s*=\s*"\K[^"]+' utils/config.py || true)"
+VERSION="${1:-${CONFIG_VERSION:?impossibile leggere APP_VERSION da utils/config.py — passala come 1° argomento}}"
 FLAVOR="${2:-cpu}"
+
+echo "🏗️  Building sophiacloud/vector:${VERSION} (${FLAVOR})"
 
 case "$FLAVOR" in
   cpu)
