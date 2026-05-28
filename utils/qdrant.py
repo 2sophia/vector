@@ -18,6 +18,7 @@ from utils.settings import DEFAULT_EMBEDDING_DIMENSION
 from .embeddings import get_bge_embeddings, get_bge_reranking_docs
 from .globals import to_bool, to_int
 from .schemas import RankingOptions
+from .ranking import apply_final_ranking
 
 # Import da STESSO pacchetto (utils/) - USA IL PUNTO!
 from .settings import QDRANT_URL
@@ -404,6 +405,15 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
     raw = ranking_options.get("fusion_method", "rrf")
     fusion_method = mapping.get(raw, models.Fusion.RRF)
 
+    # ACORN (Qdrant 1.16+): filtered-HNSW. L'agent filtra SEMPRE per slug → con un
+    # filtro attivo lascia che ACORN attraversi il grafo HNSW rispettando il filtro
+    # (recall migliore). Si auto-disattiva sopra max_selectivity (0.4): se il filtro
+    # è poco selettivo non costa nulla. Senza filtro → None (search vanilla).
+    acorn_params = (
+        models.SearchParams(acorn=models.AcornSearchParams(enable=True))
+        if filter_conditions is not None else None
+    )
+
     # ========== STEP 4: BATCH QUERY QDRANT (TUTTI INSIEME!) ==========
     logger.info("Executing batch search on Qdrant...")
 
@@ -434,6 +444,7 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
                         limit=dense_limit,
                         score_threshold=dense_threshold,
                         filter=filter_conditions,
+                        params=acorn_params,
                     ),
                     models.Prefetch(
                         query=sparse_vector,
@@ -441,6 +452,7 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
                         limit=sparse_limit,
                         score_threshold=sparse_threshold,
                         filter=filter_conditions,
+                        params=acorn_params,
                     ),
                 ],
 
@@ -450,9 +462,14 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
                 ),
 
                 filter=filter_conditions,
-                with_payload=search_data.include_metadata,
+                # with_payload SEMPRE True: il `text` del payload serve al reranker e al
+                # contenuto della risposta. `include_metadata` filtra solo COSA torna al
+                # client (gestito nel router), NON cosa si recupera qui — con False il
+                # payload era None e il rerank crashava (.get su None). Vedi routers/search.
+                with_payload=True,
                 score_threshold=fusion_threshold,
                 limit=fusion_limit,
+                params=acorn_params,
 
             )
         ],
@@ -532,8 +549,12 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
 
     # disabled recommendation
     if not enable_recommendation:
+        # Stadio di ranking finale (opt-in: recency / MMR / grouping per-file) applicato
+        # sul pool reranked PRIMA del taglio a max_num_results. A default off è un no-op
+        # che taglia e basta → comportamento storico invariato. Vedi utils/ranking.py.
+        ranked = apply_final_ranking(seed_points, search_data, collection_name, qdrant_client)
         results_to_return = []
-        for point, rerank_score in seed_points[:search_data.max_num_results]:
+        for point, rerank_score in ranked:
             results_to_return.append({
                 "id": str(point.id),
                 "score_rerank": float(rerank_score),
@@ -558,7 +579,7 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
             seed_point_id=sid,
             neighbors_per_seed=neighbors_per_seed,
             filter_conditions=filter_conditions,
-            include_payload=search_data.include_metadata,
+            include_payload=True,  # serve il text per il contenuto/rerank dei vicini
         )
         neighbors_by_seed[str(sid)] = recs
 

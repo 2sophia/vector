@@ -73,6 +73,14 @@ class RankingOptions(BaseModel):
     max_seed_results: Optional[int] = 3
     neighbors_per_seed: Optional[int] = 2
 
+    # --- Stadio di ranking finale (applicato DOPO il cross-encoder, vedi utils/ranking.py) ---
+    # Tutto OPT-IN, default off → comportamento storico invariato. Agiscono sul pool
+    # reranked prima del taglio a max_num_results.
+    recency_half_life_days: Optional[float] = None  # boost freschezza: decay 0.5^(età/half_life). None/0 = off (es. 180 = 6 mesi)
+    recency_weight: Optional[float] = 0.3           # peso blend rilevanza↔freschezza quando il boost è attivo (0..1)
+    mmr_diversity: Optional[float] = None           # MMR anti near-duplicate: 0=pura rilevanza/off, 0.3–0.5 diversifica
+    group_by_file_max: Optional[int] = None         # max N chunk per documento nei risultati. None/0 = off (es. 2)
+
 
 class VectorSearch(BaseModel):
     query: str  # Ora accetta stringa

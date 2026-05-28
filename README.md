@@ -30,6 +30,30 @@
   <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/mcp.png" alt="Sophia Vector — MCP server (search + NLP tools over Model Context Protocol)" width="100%">
 </p>
 
+## Run it — Docker image
+
+Published on Docker Hub: **[`sophiacloud/vector`](https://hub.docker.com/r/sophiacloud/vector)** (backend **and** frontend in one image, multi-arch amd64/arm64).
+
+```bash
+docker run -d --name sophia-vector \
+  -p 8100:8100 -p 3100:3100 \
+  -e SOPHIA_VECTOR_QDRANT_URL=http://qdrant:6333 \
+  -e SOPHIA_VECTOR_MONGODB_URI=mongodb://mongo:27017 \
+  -e SOPHIA_VECTOR_DOCLING_URL=http://parser:5001 \
+  -e SOPHIA_VECTOR_EMBEDDINGS_URL=http://embeddings:8004 \
+  -e NEXTAUTH_SECRET=change-me \
+  -e SOPHIA_VECTOR_SECRET_KEY=change-me \
+  -v sophia_vector_data:/app/storage \
+  sophiacloud/vector:0.6.0-alpha --frontend
+```
+
+- **API** on `:8100` (OpenAI-compatible `/v1/*`), **management UI** on `:3100` (first login becomes admin)
+- `--frontend` starts the UI too; drop it to run the backend only
+- Needs **Qdrant**, **MongoDB**, **Docling** and a **BGE-M3** endpoint reachable — the whole stack is wired up in [`docker-compose.yml`](docker-compose.yml) (recommended: `docker compose up -d`)
+- GPU build available as `sophiacloud/vector:0.6.0-alpha-cu130` (see [GPU acceleration](#gpu-acceleration-optional))
+
+> Full env reference in [Configuration](#configuration). For a one-command local stack use Compose; the bare `docker run` above is the minimal shape.
+
 ## Overview
 
 Sophia Vector is a FastAPI vector storage/retrieval system with an OpenAI-compatible API
@@ -189,7 +213,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 ./compile-and-publish.sh [version]            # CPU image, multi-arch (amd64 + arm64) + push
 ./compile-and-publish.sh [version] cu130      # GPU image (torch cu130), amd64 → :<version>-cu130
 # or directly:
-docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.4.0-alpha --push .
+docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.6.0-alpha --push .
 ```
 
 On the prod host, copy `.env.prod` → `.env` (only secrets + `NEXTAUTH_URL`; service URLs are
@@ -206,7 +230,7 @@ which is fine for moderate volumes. To run them on a GPU, build the **GPU flavor
 (`Dockerfile.cu130`, torch cu130 / CUDA 13.0, ~2 GB larger):
 
 ```bash
-./compile-and-publish.sh 0.4.0-alpha cu130    # → sophiacloud/vector:0.4.0-alpha-cu130
+./compile-and-publish.sh 0.6.0-alpha cu130    # → sophiacloud/vector:0.6.0-alpha-cu130
 ```
 
 Then point the compose service at the `-cu130` image, give it the GPU (host needs the NVIDIA driver
@@ -215,7 +239,7 @@ Then point the compose service at the `-cu130` image, give it the GPU (host need
 
 ```yaml
 # docker-compose.yml (sophia-vector service)
-image: sophiacloud/vector:0.4.0-alpha-cu130
+image: sophiacloud/vector:0.6.0-alpha-cu130
 deploy:
   resources:
     reservations:
@@ -357,7 +381,7 @@ Interactive API reference (Scalar, shown above) — full `/v1/*` surface, try-it
 
 ## Version
 
-Current version: **0.4.0-alpha**
+Current version: **0.6.0-alpha**
 
 ## License
 
