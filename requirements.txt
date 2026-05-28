@@ -29,3 +29,5 @@ extract-msg
 # trascrizione audio/video su CPU (lazy, vedi utils/transcribe.py). Richiede
 # ffmpeg (Dockerfile) per estrarre l'audio dai video.
 faster-whisper
+# MCP server (/mcp, MCP_ENABLED): espone search + NLP come tool Model Context Protocol.
+mcp

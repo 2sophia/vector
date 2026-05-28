@@ -19,7 +19,9 @@ services:
 #    volumes:
 #      - sophia_vector_data:/app/storage
 
+  # ==========================================================================
   # MongoDB: in DEV gira come binario nell'OS (non container).
+  # ==========================================================================
 
   # ==========================================================================
   # IBM Docling Parser
@@ -102,7 +104,7 @@ services:
       - "127.0.0.1:6379:6379"
       - "127.0.0.1:6380:3000"
     environment:
-      - REDIS_ARGS=--requirepass falkordb
+      - REDIS_ARGS=--appendonly yes --save 60 1000 --requirepass falkordb
       - ENCRYPTION_KEY=una-chiave-lunga-e-stabile-32+char
     restart: unless-stopped
     volumes:

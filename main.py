@@ -1,8 +1,9 @@
 import sys
+import hmac
 import asyncio
 from fastapi import FastAPI
 from fastapi import Request, Depends
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -28,6 +29,35 @@ logger = get_logger(__name__)
 
 
 # ============================================================
+# MCP AUTH (sub-app montata: le Depends dei router non la coprono)
+# ============================================================
+
+class MCPAuthMiddleware:
+    """Applica a /mcp la stessa API key di /v1/* (no-op se SOPHIA_VECTOR_API_KEY è vuota).
+
+    Le dependency FastAPI non si applicano alle sub-app montate, quindi proteggiamo /mcp
+    con un middleware ASGI puro (trasparente allo streaming SSE del trasporto MCP). Stessa
+    logica di utils.auth.require_api_key: Bearer + confronto a tempo costante."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/mcp"):
+            expected = settings.API_KEY
+            # OPTIONS (preflight CORS) lasciato passare; il check vale solo se la key è impostata
+            if expected and scope.get("method") != "OPTIONS":
+                headers = dict(scope.get("headers") or [])
+                auth = headers.get(b"authorization", b"").decode()
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                if not token or not hmac.compare_digest(token, expected):
+                    resp = JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+                    await resp(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+# ============================================================
 # LIFESPAN
 # ============================================================
 
@@ -36,6 +66,9 @@ async def lifespan(app: FastAPI):
     render_banner()
 
     stop_event.clear()
+
+    if settings.NLP_ENABLED:
+        logger.info("🧠 NLP endpoints attivi → /v1/nlp (tokenize, detokenize, ner, classify, relex, transcribe)")
 
     tasks = [
         asyncio.create_task(
@@ -49,19 +82,27 @@ async def lifespan(app: FastAPI):
         ),
     ]
 
-    try:
-        yield
+    async with AsyncExitStack() as stack:
+        # MCP (/mcp): il trasporto streamable-HTTP richiede il suo session_manager attivo
+        # per tutta la vita dell'app. Innestato qui (non sostituisce la supervisione worker).
+        if settings.MCP_ENABLED:
+            from routers.mcp import mcp as mcp_server
+            await stack.enter_async_context(mcp_server.session_manager.run())
+            logger.info("🔌 MCP server attivo → /mcp (9 tool: search/list_files/get_document/search_by_name/list_* + NLP, + prompt rag_research)")
 
-    finally:
-        stop_event.set()
+        try:
+            yield
 
-        # termina gruppi (async, non blocca l'event loop)
-        for p in worker_procs.values():
-            await terminate_worker_group(p)
+        finally:
+            stop_event.set()
 
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+            # termina gruppi (async, non blocca l'event loop)
+            for p in worker_procs.values():
+                await terminate_worker_group(p)
+
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ============================================================
@@ -110,6 +151,13 @@ app.include_router(schedules_router, dependencies=_v1)
 # worker e client esterni li usano via HTTP — una sola copia. Spegnibile via env.
 if settings.NLP_ENABLED:
     app.include_router(nlp_router, dependencies=_v1)
+
+# MCP server (/mcp): espone search + NLP come tool Model Context Protocol per gli agent.
+# Sub-app streamable-HTTP; il session_manager gira nel lifespan, l'auth via MCPAuthMiddleware.
+if settings.MCP_ENABLED:
+    from routers.mcp import mcp as mcp_server
+    app.add_middleware(MCPAuthMiddleware)
+    app.mount("/mcp", mcp_server.streamable_http_app())
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):

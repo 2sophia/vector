@@ -13,6 +13,7 @@ __pycache__/
 .data/
 storage/
 .claude
+research
 
 # Modelli fine-tunati prodotti dalla suite tuning/
 tuning/out/

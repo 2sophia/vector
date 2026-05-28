@@ -22,6 +22,14 @@
   <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/api.png" alt="Sophia Vector — OpenAI-compatible API reference (Scalar)" width="100%">
 </p>
 
+---
+
+### MCP server — RAG & NLP tools for your agents
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/2sophia/vector/main/docs/mcp.png" alt="Sophia Vector — MCP server (search + NLP tools over Model Context Protocol)" width="100%">
+</p>
+
 ## Overview
 
 Sophia Vector is a FastAPI vector storage/retrieval system with an OpenAI-compatible API
@@ -77,6 +85,13 @@ the gap it fills.
   on what's already indexed: **dry-run first**, then apply, fully reversible — no re-ingestion
 - **Per-model device** — place GLiNER/relex and Whisper independently on CPU or a specific GPU
   (`SOPHIA_VECTOR_GLINER_DEVICE` / `ASR_DEVICE`), with graceful CPU fallback
+- **NLP utility endpoints** — the in-codebase models exposed on demand under `/v1/nlp/*`:
+  `tokenize`/`detokenize` (BGE-M3), `ner` (GLiNER + regex), `classify` (GliClass), `relex` (typed
+  relations), `transcribe` (Whisper). **Lazy-loaded** (zero cost when unused); the backend owns a
+  **single copy** of each model and the ingestion worker calls them over HTTP — no duplicate weights
+- **MCP server** — Sophia Vector as a **Model Context Protocol** server (`/mcp`, streamable-HTTP):
+  agents get `search` (RAG) plus entity/classification/relation tools natively, reusing the same
+  internal functions and models. Gated by `SOPHIA_VECTOR_MCP_ENABLED`, behind the same API key as `/v1/*`
 - **Multi-source ingestion** — provider abstraction (SharePoint enabled; Google Drive/Workspace/S3
   as placeholders) with per-source **encrypted credentials** (Fernet)
 - **Scheduled sync** — internal cron (configurable from the UI), replaces system crontab; run
@@ -136,6 +151,13 @@ The list is **verified end-to-end** by `tests/verify_formats.py`, which regenera
 
 The graph is an **additive** layer: if FalkorDB is down, ingestion and search on Qdrant keep
 working (best-effort writes). Set `SOPHIA_VECTOR_GRAPH_ENABLED=false` to disable it entirely.
+
+> ⚠️ **FalkorDB persistence — enable AOF or you lose the graph on restart.** FalkorDB is
+> Redis-based: with the default config it only snapshots to its `/data` volume periodically, so a
+> hard container restart can drop the graph (the RDB on disk lags behind memory). Turn on the
+> append-only file so every write is durable — in `docker-compose.yml`, on the `falkordb` service:
+> `environment: { REDIS_ARGS: "--appendonly yes --save 60 1000" }`. Qdrant is unaffected (separate
+> persistence); and since the graph is *derived* data, if it's ever lost it rebuilds with a re-ingest.
 
 ## Prerequisites
 
@@ -240,7 +262,10 @@ the compose service names). NextAuth frontend vars are unprefixed (`NEXTAUTH_SEC
 | `SOPHIA_VECTOR_CLASSIFIER_ENABLED`      | `false`                                       | Zero-shot chunk classification (GliClass; opt-in, needs `pip install gliclass`) |
 | `SOPHIA_VECTOR_CLASSIFIER_LABELS`       | `antiriciclaggio,privacy e protezione dati,…` | Classification labels (CSV, zero-shot; by theme)                                |
 | `SOPHIA_VECTOR_CURATION_ENABLED`        | `true`                                        | Boilerplate detection + suppression                                             |
-| `SOPHIA_VECTOR_INTERNAL_API_URL`        | `http://127.0.0.1:8100`                       | Scheduler → backend (internal)                                                  |
+| `SOPHIA_VECTOR_API_KEY`                 | _(empty)_                                     | Bearer key for `/v1/*` and `/mcp` (empty = no auth, trusted network)            |
+| `SOPHIA_VECTOR_NLP_ENABLED`             | `true`                                        | Expose the `/v1/nlp/*` model endpoints                                          |
+| `SOPHIA_VECTOR_MCP_ENABLED`             | `true`                                        | Expose the MCP server at `/mcp`                                                 |
+| `SOPHIA_VECTOR_INTERNAL_API_URL`        | `http://127.0.0.1:8100`                       | Scheduler/worker → backend (internal)                                           |
 
 ## API Endpoints
 
@@ -269,6 +294,14 @@ GET|PUT|DELETE /v1/ingest/sharepoint/{id}/schema   # extraction schema (sync sco
 
 # Scheduled sync (internal cron)
 GET|PUT /v1/sync/schedule/{type}    GET /v1/sync/runs/{type}
+
+# NLP utilities — the in-codebase models as an on-demand API (lazy-loaded)
+POST /v1/nlp/tokenize    POST /v1/nlp/detokenize          # BGE-M3 tokenizer
+POST /v1/nlp/ner    POST /v1/nlp/classify    POST /v1/nlp/relex   # GLiNER / GliClass / GLiNER-relex
+POST /v1/nlp/transcribe                            # audio/video → VTT (Whisper)
+
+# MCP server (Model Context Protocol, streamable-HTTP) — tools for MCP-compatible agents
+GET|POST /mcp   # search, list_vector_stores, list_directories, extract_entities, classify_text, extract_relations
 ```
 
 ### Search example (with graph expansion)

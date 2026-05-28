@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Sophia Vector"
-    APP_VERSION: str = "0.5.0-alpha"
+    APP_VERSION: str = "0.6.0-alpha"
     DEBUG: bool = False
 
     # --- Auth / sicurezza ---
@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # endpoint sia l'ingestion (il worker li chiama via HTTP) → un solo device, GLINER_DEVICE.
     # Whisper sta a parte su ASR_DEVICE.
     NLP_ENABLED: bool = True
+
+    # --- MCP server (/mcp): Sophia Vector come server Model Context Protocol ---
+    # Espone search + i tool NLP agli agent (Claude, sophia-agent, qualunque client MCP).
+    # Riusa le funzioni/modelli interni (zero doppione) ed è protetto dalla stessa API key
+    # di /v1/*. Trasporto streamable-HTTP montato su /mcp. Spegnibile qui.
+    MCP_ENABLED: bool = True
 
     # --- Storage su disco ---
     FILES_STORAGE: str = "/app/storage/files"
