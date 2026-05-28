@@ -373,7 +373,7 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
 
     # Soglia sul punteggio ASSOLUTO del cross-encoder (rerank) applicata dopo il
     # reranking → search CHIRURGICA. NB: il punteggio NON è portabile (verbatim ~0.98,
-    # parafrasi 0.2–0.5). Tarata su gold-set reale (scripts/audit_*, corpus ViViBanca):
+    # parafrasi 0.2–0.5). Tarata su gold-set reale (scripts/audit_*, corpus documentale):
     # 0.25 dà recall@5 88% con 0/8 falsi positivi sui negativi (max-score negativi 0.203).
     score_threshold = ranking_options.get('score_threshold', 0.25)
 

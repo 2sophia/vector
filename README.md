@@ -385,7 +385,7 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 
 `scripts/audit_ingest.py` + `scripts/audit_eval.py` ingest a real document sample via the API and
 score the search against a labeled gold set — **positives** (query → expected document) and
-**negatives** (out-of-corpus queries that must return *nothing*). On a 30-document banking sample
+**negatives** (out-of-corpus queries that must return *nothing*). On a 30-document sample
 (26 positives + 8 negatives):
 
 | rerank threshold | recall@5 | MRR  | out-of-corpus leakage |

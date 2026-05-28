@@ -44,7 +44,7 @@ class RankingOptions(BaseModel):
     """Opzioni per il ranking e reranking dei risultati."""
     # Soglia sul punteggio ASSOLUTO del cross-encoder dopo il rerank: rende la search
     # CHIRURGICA (torna solo il pertinente, nulla se la risposta non c'è). Tarata su un
-    # gold-set reale (corpus ViViBanca, 26 query + 8 negative, scripts/audit_*):
+    # gold-set reale (26 query + 8 negative su un corpus documentale, scripts/audit_*):
     #   0.1  → recall@5 92% ma 4/8 query "fuori corpus" tornavano rumore (NON chirurgica)
     #   0.25 → recall@5 88% e 0/8 falsi positivi  ← scelto: gap netto coi negativi (max 0.203)
     #   0.5  → recall@5 81% (taglia troppi veri positivi "deboli"/tabellari)

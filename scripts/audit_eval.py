@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit eval — misura la qualità della search sul gold set (campione reale ViViBanca).
+"""Audit eval — misura la qualità della search sul gold set (un campione di documenti).
 
 Per ogni configurazione (soglia rerank, graph_expand) calcola:
   - POSITIVI: recall@1/5/10 + MRR + score del primo hit corretto (precisione/recall)
@@ -20,7 +20,9 @@ sys.path.insert(0, os.path.dirname(HERE))
 from routers.search import search_vector_store
 from utils.schemas import VectorSearch, RankingOptions
 
-gold = json.load(open(os.path.join(HERE, "audit_gold.json")))
+# gold set: usa il file reale/privato (gitignorato) se c'è, altrimenti il template generico
+_gold_local = os.path.join(HERE, "audit_gold.local.json")
+gold = json.load(open(_gold_local if os.path.exists(_gold_local) else os.path.join(HERE, "audit_gold.json")))
 manifest = json.load(open(os.path.join(HERE, "audit_manifest.json")))
 VS = manifest["vector_store_id"]
 

@@ -34,3 +34,8 @@ frontend/tsconfig.tsbuildinfo
 .vscode/
 .DS_Store
 *.log
+
+# Audit: dati reali specifici del cliente — NON committare (repo pubblica)
+scripts/audit_manifest.json
+scripts/audit_gold.local.json
+scripts/*.local.json
