@@ -233,10 +233,14 @@ async def put_directory_schema(directory_id: str, body: StoreSchemaUpdate):
     if not doc:
         raise HTTPException(status_code=404, detail="Directory not found")
     vs, slug = doc["vector_store_id"], doc.get("slug", "")
-    await asyncio.to_thread(
-        set_schema, "dir", f"{vs}:{slug}", vs,
-        body.entity_labels, body.relation_labels, body.relations_enabled,
-    )
+    try:
+        await asyncio.to_thread(
+            set_schema, "dir", f"{vs}:{slug}", vs,
+            body.entity_labels, body.relation_labels, body.relations_enabled,
+            body.chunk_max_tokens,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return await asyncio.to_thread(_dir_schema_response, directory_id, vs, slug)
 
 

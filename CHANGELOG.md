@@ -4,6 +4,17 @@ All notable changes to Sophia Vector are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/); the project follows
 semantic versioning (currently in the `alpha` pre-release line).
 
+## [0.4.2-alpha] — 2026-05-28
+
+### Added
+- **Per-document chunk size** (`chunk_max_tokens`), configurable through the same cascade as the
+  extraction schema: `file → directory → sync → store → global default`. Set it on a whole store
+  (`PUT /v1/vector_stores/{id}/schema`), on a directory (`PUT /v1/directories/{id}/schema`), or on a
+  single file at attach time via the OpenAI-compatible `chunking_strategy.static.max_chunk_size_tokens`.
+  A level that doesn't set it inherits from the one below; the override applies on the next (re-)ingest.
+  Validated against the BGE-M3 tokenizer window (16–8192). The previously-inert `chunking_strategy`
+  field on file attach is now wired up (default `None` = inherit the cascade).
+
 ## [0.4.1-alpha] — 2026-05-28
 
 Security and robustness hardening. A full audit of the codebase (including the older modules)

@@ -13,8 +13,10 @@ logger = get_logger(__name__)
 
 
 class StoreSchemaUpdate(BaseModel):
-    """Schema di estrazione (entità + relazioni, zero-shot) per un livello del cascade.
-    Tutti opzionali: None lascia il campo invariato (eredita il livello sotto)."""
+    """Schema di ingestion per un livello del cascade: chunking + estrazione (entità +
+    relazioni, zero-shot). Tutti opzionali: None lascia il campo invariato (eredita il
+    livello sotto). chunk_max_tokens vale dal prossimo (re-)ingest dei documenti."""
+    chunk_max_tokens: Optional[int] = None
     entity_labels: Optional[List[str]] = None
     relation_labels: Optional[List[str]] = None
     relations_enabled: Optional[bool] = None
@@ -120,13 +122,10 @@ class SearchResponse(BaseModel):
 
 class FileAttach(BaseModel):
     file_id: str
-    chunking_strategy: Optional[Dict[str, Any]] = {
-        "type": "static",
-        "static": {
-            "max_chunk_size_tokens": DEFAULT_CHUNK_SIZE,
-            "chunk_overlap_tokens": DEFAULT_CHUNK_OVERLAP
-        }
-    }
+    # OpenAI-compatibile e opt-in: default None = eredita la cascata (dir/store/global).
+    # Se valorizzato (es. {"type":"static","static":{"max_chunk_size_tokens":768}}), il
+    # max_chunk_size_tokens diventa un override di chunk a livello FILE per questo attach.
+    chunking_strategy: Optional[Dict[str, Any]] = None
     attributes: Optional[Dict[str, Any]] = {}
 
 

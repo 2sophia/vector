@@ -421,10 +421,14 @@ def put_store_schema(vector_store_id: str, body: StoreSchemaUpdate):
     collections = [c.name for c in qdrant_client.get_collections().collections]
     if vector_store_id not in collections:
         raise HTTPException(status_code=404, detail="Vector store not found")
-    set_schema(
-        "store", vector_store_id, vector_store_id,
-        body.entity_labels, body.relation_labels, body.relations_enabled,
-    )
+    try:
+        set_schema(
+            "store", vector_store_id, vector_store_id,
+            body.entity_labels, body.relation_labels, body.relations_enabled,
+            body.chunk_max_tokens,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {
         "object": "vector_store.schema",
         "vector_store_id": vector_store_id,
@@ -699,6 +703,19 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
         j["file_id"] for j in existing
         if j.get("file_id") and j["file_id"] != file_data.file_id
     ]
+
+    # Override di chunk a livello FILE da chunking_strategy (OpenAI-compat, opt-in):
+    # se l'attach lo specifica, vince sulla cascata dir/store per questo file.
+    cs = file_data.chunking_strategy if isinstance(file_data.chunking_strategy, dict) else {}
+    mct = (cs.get("static") or {}).get("max_chunk_size_tokens")
+    if mct:
+        try:
+            await asyncio.to_thread(
+                set_schema, "file", file_data.file_id, vector_store_id,
+                None, None, None, int(mct),
+            )
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=422, detail=f"chunking_strategy non valido: {e}")
 
     # 3) Crea job su Mongo
     now_ts = get_timestamp()

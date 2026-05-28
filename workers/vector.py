@@ -250,6 +250,17 @@ async def _process_job(job: Dict[str, Any]):
     if CURATION_ENABLED:
         await asyncio.to_thread(purge_file_bodies, vector_store_id, file_id)
 
+    # Schema di INGESTION effettivo, risolto UNA volta a cascata
+    # file→directory→sync→store→default globale (utils.store_schema): governa il chunk
+    # size (usato ORA, prima del chunking) e le label di estrazione (usate dopo).
+    attributes = job.get("attributes") or {}
+    directory_slug = attributes.get("sophia_directory_slug")
+    # sharepoint_job_id è un ObjectId nei job: str() per combaciare con lo scope "sync".
+    sync_id = str(job["sharepoint_job_id"]) if job.get("sharepoint_job_id") else None
+    schema = await asyncio.to_thread(
+        get_effective_schema, vector_store_id, directory_slug, sync_id, file_id
+    )
+
     # 0) Normalizza per il parser: i formati che Docling non mangia (mail,
     # Office binario, rtf, odf, txt) vengono convertiti in una tempdir prima del
     # chunking. I formati nativi passano invariati (tmp_dir=None).
@@ -264,9 +275,12 @@ async def _process_job(job: Dict[str, Any]):
         await set_job_status(job_id, "FAILED", {"error": f"Conversion error: {e}"})
         return
 
-    # 1) Chunking via Docling (sul file normalizzato; tempdir ripulita a fine parse)
+    # 1) Chunking via Docling (sul file normalizzato; tempdir ripulita a fine parse).
+    # chunk_max_tokens viene dallo schema effettivo (override per file/dir/store).
     try:
-        result = await asyncio.to_thread(upload_file_for_chunking_sync, parse_path)
+        result = await asyncio.to_thread(
+            upload_file_for_chunking_sync, parse_path, schema["chunk_max_tokens"]
+        )
     except Exception as e:
         logger.exception(f"[{tag}] Docling chunking failed: {e}")
         await set_job_status(job_id, "FAILED", {"error": f"Chunking error: {e}"})
@@ -293,7 +307,6 @@ async def _process_job(job: Dict[str, Any]):
 
     # 2) Embeddings + upsert Qdrant a batch
     total_indexed = 0
-    attributes = job.get("attributes") or {}
     # Accumula i chunk (con il point_id Qdrant) per scrivere il grafo a fine job.
     graph_chunks: List[Dict[str, Any]] = []
     # Body-hash distinti del documento (curation): un disclaimer ripetuto N volte
@@ -302,16 +315,7 @@ async def _process_job(job: Dict[str, Any]):
     # Relazioni tipizzate del documento (M5, GLiNER-relex): accumulate e scritte a
     # fine job (write_relations aggrega/dedup per (head,type,tail)).
     doc_relations: List[Dict[str, Any]] = []
-    # Schema di estrazione EFFETTIVO, risolto a cascata file→directory→sync→store→
-    # default globale (utils.store_schema). Mantiene il motore agnostico: il dominio
-    # (quali entità/relazioni, e se estrarre relazioni) è config, al livello giusto.
-    directory_slug = attributes.get("sophia_directory_slug")
-    # sharepoint_job_id è un ObjectId nei job: str() per combaciare con lo scope
-    # "sync" salvato dall'endpoint (ingestion_id = str(ObjectId)).
-    sync_id = str(job["sharepoint_job_id"]) if job.get("sharepoint_job_id") else None
-    schema = await asyncio.to_thread(
-        get_effective_schema, vector_store_id, directory_slug, sync_id, file_id
-    )
+    # Label di estrazione dallo schema effettivo (già risolto prima del chunking).
     entity_labels = schema["entity_labels"]
     relation_labels = schema["relation_labels"]
     relations_on = schema["relations_enabled"]

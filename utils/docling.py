@@ -92,9 +92,13 @@ def _log_request_error(err: Exception, url: str) -> None:
     logger.error("Traceback completo:\n" + traceback.format_exc())
 
 
-def _build_chunking_params() -> dict[str, Any]:
+def _build_chunking_params(max_tokens: int | None = None) -> dict[str, Any]:
     """
     Costruisce i parametri per l'endpoint /chunk/hybrid/file.
+
+    `max_tokens`: override per-documento della dimensione massima del chunk (risolto
+    a cascata file→dir→sync→store→default in utils/store_schema). Se None usa il
+    default globale PARSER_MODEL_MAX_TOKENS.
 
     Riferimento: API spec con prefisso "convert_" e "chunking_"
     """
@@ -139,7 +143,7 @@ def _build_chunking_params() -> dict[str, Any]:
         # chiave-valore esplicite e robustezza allo split (ogni riga è auto-contenuta).
         "chunking_use_markdown_tables": False,
         "chunking_include_raw_text": False,
-        "chunking_max_tokens": PARSER_MODEL_MAX_TOKENS,
+        "chunking_max_tokens": int(max_tokens) if max_tokens else PARSER_MODEL_MAX_TOKENS,
         "chunking_tokenizer": PARSER_MODEL_TOKENIZER,
         # merge_peers OFF: su documenti con tabelle dense (es. norme assuntive)
         # il merge dei chunk adiacenti tokenizza/confronta i peer ed esplode in
@@ -342,12 +346,14 @@ def upload_file_for_parsing_task_sync(file_path: str) -> dict:
         raise
 
 
-def upload_file_for_chunking_sync(file_path: str) -> dict:
+def upload_file_for_chunking_sync(file_path: str, max_tokens: int | None = None) -> dict:
     """
     Carica un file per chunking sincrono (con retry).
+
+    `max_tokens`: override per-documento di chunking_max_tokens (vedi cascata schema).
     """
     url = f"{DOCLING_URL}/v1/chunk/hybrid/file"
-    logger.debug(f"[POST FILE SYNC] {url} – file: {file_path}")
+    logger.debug(f"[POST FILE SYNC] {url} – file: {file_path} max_tokens={max_tokens}")
 
     last_error: Exception | None = None
 
@@ -356,7 +362,7 @@ def upload_file_for_chunking_sync(file_path: str) -> dict:
             with open(file_path, "rb") as f:
                 filename = os.path.basename(file_path)
                 files = {"files": (filename, f, "application/octet-stream")}
-                data = _build_chunking_params()
+                data = _build_chunking_params(max_tokens)
 
                 resp = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT)
                 logger.debug(f"[RESPONSE STATUS] {resp.status_code}")
