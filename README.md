@@ -372,6 +372,24 @@ gold-chunk rank, Recall@3 and MRR — to measure whether the graph actually help
 .venv/bin/python scripts/bench_search.py <vector_store_id>
 ```
 
+### Gold-set audit (real corpus)
+
+`scripts/audit_ingest.py` + `scripts/audit_eval.py` ingest a real document sample via the API and
+score the search against a labeled gold set — **positives** (query → expected document) and
+**negatives** (out-of-corpus queries that must return *nothing*). On a 30-document banking sample
+(26 positives + 8 negatives):
+
+| rerank threshold | recall@5 | MRR  | out-of-corpus leakage |
+|------------------|---------:|-----:|----------------------:|
+| 0.10             | 92%      | 0.84 | 4/8 ❌                 |
+| **0.25 (default)** | **88%**  | 0.80 | **0/8 ✅**             |
+| 0.50             | 81%      | 0.77 | 0/8 ✅                 |
+
+The default `score_threshold` is **0.25**: it keeps recall high while the search stays **surgical**
+— only relevant hits, and **empty when the answer isn't there** (negatives top out at ~0.20, well
+below the cutoff). Graph expansion and NER do **not** change retrieval recall here (dense+sparse+
+rerank already saturate it); they add faceting / graph / extraction value, not retrieval lift.
+
 ## API Documentation
 
 Interactive API reference (Scalar, shown above) — full `/v1/*` surface, try-it-out, MCP export:

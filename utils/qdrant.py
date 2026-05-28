@@ -372,12 +372,10 @@ def qdrant_hybrid_batch_search(collection_name: str, query_text: str, search_dat
     ranking_options = (search_data.ranking_options or RankingOptions()).model_dump()
 
     # Soglia sul punteggio ASSOLUTO del cross-encoder (rerank) applicata dopo il
-    # reranking. NB: il punteggio del cross-encoder NON è portabile — per query col
-    # testo verbatim vale ~0.98, per parafrasi/cross-lingua scende a 0.05–0.2 anche
-    # quando il match è reale. 0.22 azzerava query oblique legittime (es. dense 0.54
-    # → 0 risultati); 0.1 recupera il borderline e continua a scartare la spazzatura
-    # (<0.05), senza toccare l'ordine del rerank (i risultati in-corpus restano ~0.98).
-    score_threshold = ranking_options.get('score_threshold', 0.1)
+    # reranking → search CHIRURGICA. NB: il punteggio NON è portabile (verbatim ~0.98,
+    # parafrasi 0.2–0.5). Tarata su gold-set reale (scripts/audit_*, corpus ViViBanca):
+    # 0.25 dà recall@5 88% con 0/8 falsi positivi sui negativi (max-score negativi 0.203).
+    score_threshold = ranking_options.get('score_threshold', 0.25)
 
     # Configurazione per score Qdrant
     dense_threshold = ranking_options.get('dense_threshold', 0.05)  # basso, per non tagliare troppo

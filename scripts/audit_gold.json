@@ -1,0 +1,41 @@
+{
+  "note": "Gold set per l'audit search su campione reale ViViBanca (vs in audit_manifest.json). 'expect' = sottostringa del filename atteso (case-insensitive). 'negatives' = query su temi NON presenti nel campione: la search deve tornare vuoto/irrilevante (chirurgica).",
+  "positives": [
+    {"q": "quali sono i settori considerati ad alto rischio di riciclaggio", "expect": "Settori alto rischio"},
+    {"q": "soglie di warning per il monitoraggio antiriciclaggio", "expect": "Soglie warning"},
+    {"q": "scheda KYC per i cessionari di crediti fiscali", "expect": "KYC rapporto cessionari crediti fiscali"},
+    {"q": "comunicazione ai sensi dell'articolo 51", "expect": "Comunicazione ai sensi art 51"},
+    {"q": "tabella dei risk factor e classe di rischio associata", "expect": "Tabella Risk Factor"},
+    {"q": "codici sintetici attività economica per la segnalazione SARA", "expect": "Codici-sintetici-attivita-economica"},
+    {"q": "schema segnaletico delle segnalazioni mensili", "expect": "Schema-segnaletico"},
+    {"q": "causali aggregate della segnalazione mensile", "expect": "Causali-aggregate"},
+    {"q": "informativa e consenso privacy per i visitatori", "expect": "informativa e consenso ai VISITATORI"},
+    {"q": "procedura di identificazione dei visitatori durante l'emergenza covid", "expect": "identificazione visitatori emergenza covid"},
+    {"q": "policy per la valutazione d'impatto sulla protezione dei dati PIA", "expect": "Policy PIA"},
+    {"q": "informativa sull'uso dei cookie", "expect": "Informativa Cookies"},
+    {"q": "policy per la protezione dei dati personali", "expect": "Policy per la Protezione dei Dati Personali"},
+    {"q": "procedura di rilevazione delle presenze del personale", "expect": "rilevazione presenze"},
+    {"q": "come funziona l'arbitro bancario finanziario ABF", "expect": "funzionamento ABF"},
+    {"q": "procedura per la gestione dei reclami della clientela", "expect": "Procedura Reclami"},
+    {"q": "procedura per l'aumento di capitale", "expect": "aumento capitale"},
+    {"q": "classificazione delle informazioni aziendali", "expect": "Classificazione delle informazioni"},
+    {"q": "procedura per il ritiro dei vaglia postali", "expect": "Ritiro vaglia postali"},
+    {"q": "linee guida per le richieste all'information technology", "expect": "richiesta a Information Tecnology"},
+    {"q": "convenzionamento delle compagnie di assicurazione", "expect": "convenzionamento Assicurazioni"},
+    {"q": "regolamento per la negoziazione delle azioni", "expect": "Regolamento Negoziazioni azioni"},
+    {"q": "procedura operativa del processo di marginazione", "expect": "processo marginazione"},
+    {"q": "regolamento del comitato politiche commerciali", "expect": "Comitato Politiche Commerciali"},
+    {"q": "regolamento del comitato remunerazioni", "expect": "Comitato Remunerazioni"},
+    {"q": "regolamento del comitato parti correlate", "expect": "Comitato Parti correlate"}
+  ],
+  "negatives": [
+    "tasso di interesse sui mutui per la prima casa",
+    "calcolo del TAEG per i prestiti personali",
+    "orari di apertura degli sportelli bancari",
+    "come attivare una carta di credito prepagata",
+    "procedura di apertura di un conto corrente online",
+    "tariffe per i bonifici internazionali SEPA",
+    "modalità di rimborso anticipato del finanziamento",
+    "requisiti per ottenere un fido di cassa"
+  ]
+}
