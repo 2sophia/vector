@@ -10,9 +10,9 @@ import {
   Database,
   FolderTree,
   Loader2,
+  BarChart3,
   Pencil,
   Plus,
-  RefreshCw,
   Share2,
   Sparkles,
   Trash2,
@@ -232,10 +232,12 @@ export default function VectorStoreDetailPage() {
                 Optimize
               </Button>
             </Link>
-            <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-              Refresh
-            </Button>
+            <Link href={`/stores/${vectorStoreId}/vectors`}>
+              <Button variant="outline" size="sm">
+                <BarChart3 className="size-4" />
+                Vectors
+              </Button>
+            </Link>
             <Button size="sm" onClick={openDialog}>
               <Plus className="size-4" />
               Nuova

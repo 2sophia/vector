@@ -74,6 +74,31 @@ def _graph(vector_store_id: str):
     return db.select_graph(f"{FALKOR_GRAPH_PREFIX}{vector_store_id}")
 
 
+def graph_stats(vector_store_id: str) -> Dict[str, Any]:
+    """Conteggi leggeri del knowledge graph di un vector store (per la pagina Vectors):
+    documenti, chunk, entità, menzioni, relazioni tipizzate. Query count (non esporta
+    il grafo). Best-effort: {"graph_enabled": False} se FalkorDB è off/irraggiungibile."""
+    g = _graph(vector_store_id)
+    if g is None:
+        return {"graph_enabled": False}
+
+    def _cnt(q):
+        try:
+            res = g.query(q)
+            return res.result_set[0][0] if res.result_set else 0
+        except Exception:
+            return 0
+
+    return {
+        "graph_enabled": True,
+        "documents": _cnt("MATCH (d:Document) RETURN count(d)"),
+        "chunks": _cnt("MATCH (c:Chunk) RETURN count(c)"),
+        "entities": _cnt("MATCH (e:Entity) RETURN count(e)"),
+        "mentions": _cnt("MATCH ()-[r:MENTIONS]->() RETURN count(r)"),
+        "relations": _cnt("MATCH ()-[r:REL]->() RETURN count(r)"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Purge (re-ingest sicuro)
 # ---------------------------------------------------------------------------

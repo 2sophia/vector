@@ -767,6 +767,110 @@ def mark_redundant(
     return stats
 
 
+# ---------------------------------------------------------------------------
+# Overview / analytics — cluster semantici + distribuzione (per la pagina Vectors)
+# ---------------------------------------------------------------------------
+
+def count_points_by_slug(collection_name: str, slug: str) -> int:
+    """Conteggio esatto dei punti di una directory (filtro top-level sul payload)."""
+    try:
+        return qdrant_client.count(
+            collection_name=collection_name,
+            count_filter=models.Filter(must=[
+                models.FieldCondition(key="sophia_directory_slug",
+                                      match=models.MatchValue(value=slug))
+            ]),
+            exact=True,
+        ).count
+    except Exception as e:
+        logger.warning(f"count_points_by_slug({collection_name},{slug}) failed: {e}")
+        return 0
+
+
+def semantic_clusters(collection_name: str, max_points: "int | None" = 5000) -> Dict[str, Any]:
+    """Raggruppa i chunk in temi (cluster semantici) sui vettori dense, in UNA passata
+    di scroll che serve anche la distribuzione per category. KMeans (mini-batch) su
+    vettori L2-normalizzati: k≈sqrt(N/2) limitato a [2,30]. Etichetta di ogni cluster =
+    category più frequente, fallback heading/filename dominante. Best-effort: se sklearn
+    manca o N è troppo piccolo, degrada (clusters vuoto). NON usa la soglia del dedup
+    (quella è per i near-duplicati, qui servono temi bilanciati).
+
+    Ritorna {points_scanned, clusters:[{id,label,size,sample:[{filename,heading}]}],
+    by_category:[{label,points}]}."""
+    from collections import Counter
+    import numpy as np
+
+    vecs, meta = [], []
+    cat_counter: Counter = Counter()
+    offset = None
+    while True:
+        pts, offset = qdrant_client.scroll(
+            collection_name=collection_name, limit=512, offset=offset,
+            with_payload=["category", "sophia_directory_slug", "filename", "headings"],
+            with_vectors=["dense"],
+        )
+        for p in pts:
+            v = p.vector.get("dense") if isinstance(p.vector, dict) else p.vector
+            if v is None:
+                continue
+            pl = p.payload or {}
+            vecs.append(v)
+            meta.append(pl)
+            for c in (pl.get("category") or []):
+                cat_counter[c] += 1
+        if offset is None:
+            break
+        if max_points and len(vecs) >= max_points:
+            break
+
+    n = len(vecs)
+    by_category = [{"label": k, "points": v} for k, v in cat_counter.most_common()]
+    if n < 2:
+        return {"points_scanned": n, "clusters": [], "by_category": by_category}
+
+    try:
+        from sklearn.cluster import MiniBatchKMeans
+    except ImportError:
+        logger.warning("sklearn non disponibile → cluster semantici saltati")
+        return {"points_scanned": n, "clusters": [], "by_category": by_category}
+
+    mat = np.asarray(vecs, dtype=np.float32)
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    mat = mat / norms
+
+    k = min(max(2, round((n / 2) ** 0.5)), 30)
+    km = MiniBatchKMeans(n_clusters=k, n_init=3, random_state=0)
+    labels = km.fit_predict(mat)
+
+    clusters = []
+    for cid in range(k):
+        idxs = [i for i, lb in enumerate(labels) if lb == cid]
+        if not idxs:
+            continue
+        cats, heads, files = Counter(), Counter(), Counter()
+        for i in idxs:
+            pl = meta[i]
+            for c in (pl.get("category") or []):
+                cats[c] += 1
+            hs = pl.get("headings") or []
+            if hs:
+                heads[hs[0]] += 1
+            if pl.get("filename"):
+                files[pl["filename"]] += 1
+        top_heading = heads.most_common(1)[0][0] if heads else None
+        label = (cats.most_common(1)[0][0] if cats
+                 else top_heading or (files.most_common(1)[0][0] if files else f"cluster {cid}"))
+        # i documenti che compongono il gruppo: quanti distinti + i principali (per n. di
+        # frammenti che contribuiscono). Un gruppo NON è un file: è un tema trasversale.
+        top_files = [{"filename": fn, "chunks": n} for fn, n in files.most_common(3)]
+        clusters.append({"id": cid, "label": label, "top_heading": top_heading,
+                         "size": len(idxs), "doc_count": len(files), "top_files": top_files})
+
+    clusters.sort(key=lambda c: c["size"], reverse=True)
+    return {"points_scanned": n, "clusters": clusters, "by_category": by_category}
+
+
 def unmark_redundant(collection_name: str) -> Dict[str, Any]:
     """Rimuove la marcatura `_redundant` da tutti i punti (reset, reversibilità)."""
     try:

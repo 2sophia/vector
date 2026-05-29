@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import aiofiles
 import aiofiles.os
 
-from fastapi import HTTPException, Query, APIRouter
+from fastapi import HTTPException, Query, APIRouter, Body
 
 from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
@@ -16,8 +16,9 @@ from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_
 from utils.qdrant import (
     create_qdrant_collection, delete_qdrant_points,
     find_redundant_clusters, mark_redundant, unmark_redundant,
+    semantic_clusters, count_points_by_slug,
 )
-from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph
+from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph, graph_stats
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
 from utils.store_schema import (
     get_effective_schema, get_schema_doc, set_schema, delete_store_schemas,
@@ -53,6 +54,7 @@ logger = get_logger(__name__)
 # create collections for jobs async management
 ingestion_jobs = db["ingestion_jobs"]
 directories_coll = db["directories"]
+overview_cache = db["vector_overview_cache"]
 # ingestion_job_chunks = db["ingestion_job_chunks"]
 
 # Crea il router (come una mini-app)
@@ -365,6 +367,9 @@ def optimize_vector_store(
             redundancy = mark_redundant(vector_store_id, dense_threshold=dense_threshold)
         else:
             redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
+    if not dry_run:
+        # graph cleanup / dedup non muovono points_count → invalida l'overview cachato
+        overview_cache.delete_one({"_id": vector_store_id})
     return {
         "object": "vector_store.optimize",
         "vector_store_id": vector_store_id,
@@ -373,6 +378,84 @@ def optimize_vector_store(
         "curation": curation,
         "redundancy": redundancy,
     }
+
+
+@router.get("/{vector_store_id}/overview")
+def vector_store_overview(vector_store_id: str, refresh: bool = Query(default=False)):
+    """Quadro d'insieme di un vector store (pagina "Vectors"): conteggi, distribuzione
+    per directory e per categoria, cluster semantici, near-duplicate, knowledge graph.
+
+    I blocchi pesanti (cluster semantici, near-duplicate) sono **cachati** in Mongo per
+    vector_store_id e invalidati automaticamente quando cambia il numero di punti
+    (ingest/delete). `refresh=true` forza il ricalcolo. Gira in threadpool (def sync)."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    points = qdrant_client.get_collection(vector_store_id).points_count or 0
+
+    # Cache: valida finché NON cambia un fingerprint cheap dello stato (punti + conteggi
+    # job + ultimo updated_at). Così si invalida anche su re-ingest/retry/fail a parità di
+    # chunk (che non muovono points_count). Le mutazioni che non toccano i job
+    # (optimize/mark_redundant) invalidano esplicitamente via overview_cache.delete_one.
+    counts = _file_counts(vector_store_id)
+    _last = ingestion_jobs.find_one(
+        {"vector_store_id": vector_store_id}, sort=[("updated_at", -1)],
+        projection={"updated_at": 1})
+    fingerprint = (f"{points}:{counts.get('total')}:{counts.get('completed')}:"
+                   f"{counts.get('failed')}:{counts.get('in_progress')}:"
+                   f"{(_last or {}).get('updated_at', 0)}")
+    cached = overview_cache.find_one({"_id": vector_store_id})
+    if not refresh and cached and cached.get("fingerprint") == fingerprint:
+        return {**cached["data"], "cached": True}
+
+    dirs = list(directories_coll.find({"vector_store_id": vector_store_id}))
+    by_directory = []
+    for d in dirs:
+        slug = d.get("slug")
+        if not slug:
+            continue
+        n_files = len(ingestion_jobs.distinct(
+            "file_id", {"vector_store_id": vector_store_id,
+                        "attributes.sophia_directory_slug": slug}))
+        by_directory.append({"slug": slug, "name": d.get("name", slug),
+                             "points": count_points_by_slug(vector_store_id, slug),
+                             "files": n_files})
+    by_directory.sort(key=lambda x: x["points"], reverse=True)
+
+    clustering = semantic_clusters(vector_store_id)
+    # max_points: bound il near-duplicate (O(N) round-trip Qdrant per punto) come fa
+    # semantic_clusters → l'overview resta veloce anche su collection grandi.
+    near_dup = find_redundant_clusters(vector_store_id, dense_threshold=0.96, max_points=2000)
+    graph = graph_stats(vector_store_id)
+
+    data = {
+        "object": "vector_store.overview",
+        "vector_store_id": vector_store_id,
+        "computed_at": get_timestamp(),
+        "counts": {
+            "points": points,
+            # punti effettivamente analizzati per cluster/categorie (può essere < points
+            # se la collection supera il cap di campionamento) → la UI può segnalarlo
+            "points_scanned": clustering.get("points_scanned", points),
+            "files": counts,
+            "directories": len(by_directory),
+            "categories": len(clustering.get("by_category", [])),
+        },
+        "by_directory": by_directory,
+        "by_category": clustering.get("by_category", []),
+        "semantic_clusters": clustering.get("clusters", []),
+        "near_duplicates": near_dup,
+        "graph": graph,
+    }
+    overview_cache.update_one(
+        {"_id": vector_store_id},
+        {"$set": {"data": data, "fingerprint": fingerprint}},
+        upsert=True,
+    )
+    return {**data, "cached": False}
 
 
 @router.get("/{vector_store_id}/graph")
@@ -513,6 +596,9 @@ def delete_vector_store(vector_store_id: str):
         dirs_delete_result = directories_coll.delete_many({"vector_store_id": vector_store_id})
         dirs_deleted_count = dirs_delete_result.deleted_count
 
+        # --- Drop overview cache doc (evita doc orfano se l'id viene riusato) ---
+        overview_cache.delete_one({"_id": vector_store_id})
+
         # --- Delete job chunks Mongo ---
         # job_delete_chunks_result = ingestion_job_chunks.delete_many({"vector_store_id": vector_store_id})
         # job_chunks_deleted = job_delete_chunks_result.deleted_count > 0
@@ -617,6 +703,58 @@ async def remove_file_from_vector_store(vector_store_id: str, file_id: str):
         logger.error(f"Error in remove_file_from_vector_store: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to remove file: {str(e)}")
+
+
+@router.post("/{vector_store_id}/files/{file_id}/retry")
+async def retry_failed_file(vector_store_id: str, file_id: str):
+    """Ri-accoda un singolo file FAILED riportando il suo job a PENDING.
+
+    NON ricrea il job: riusa lo STESSO documento (preserva attributes/slug/
+    content_hash/supersedes), azzera l'errore e lascia che il worker lo ri-pescchi
+    (claim_pending_jobs). Il binario deve essere ancora su disco (il worker rilegge
+    file_path con guard file-mancante). Update filtrato su status=FAILED →
+    idempotente e concorrenza-safe (non tocca PENDING/PROCESSING/COMPLETED)."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    job = await asyncio.to_thread(
+        ingestion_jobs.find_one,
+        {"vector_store_id": vector_store_id, "file_id": file_id, "status": "FAILED"},
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="No FAILED job for this file")
+
+    res = await asyncio.to_thread(
+        ingestion_jobs.update_one,
+        {"_id": job["_id"], "status": "FAILED"},
+        {"$set": {"status": "PENDING", "error": None, "updated_at": get_timestamp()}},
+    )
+    return {"object": "vector_store.file.retry", "file_id": file_id,
+            "requeued": res.modified_count}
+
+
+@router.post("/{vector_store_id}/retry-failed")
+async def retry_failed_files(vector_store_id: str, body: Optional[Dict[str, Any]] = Body(default=None)):
+    """Ri-accoda in massa tutti i file FAILED di un vector store (FAILED → PENDING).
+
+    Opzionale `{"slug": "..."}` nel body per limitare a una sola directory (coerente
+    con la vista UI per directory). Senza slug ri-prova TUTTI i FAILED dello store.
+    Stesso meccanismo del retry singolo: niente re-upload, il worker ri-pesca i PENDING."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    flt: Dict[str, Any] = {"vector_store_id": vector_store_id, "status": "FAILED"}
+    slug = (body or {}).get("slug")
+    if slug:
+        flt["attributes.sophia_directory_slug"] = slug
+
+    res = await asyncio.to_thread(
+        ingestion_jobs.update_many,
+        flt,
+        {"$set": {"status": "PENDING", "error": None, "updated_at": get_timestamp()}},
+    )
+    return {"object": "vector_store.retry_failed", "vector_store_id": vector_store_id,
+            "slug": slug, "requeued": res.modified_count}
 
 
 # TODO: WORK / REVIEW FILE CONTENTS?
@@ -853,6 +991,8 @@ def list_vector_store_files(vector_store_id: str):
                 "file_id": file_id,
                 "filename": job.get("filename", "unknown"),
                 "num_chunks": stats.get("num_chunks", 0),
+                # motivo del fallimento (se FAILED) → visibile in UI senza GET singolo
+                "error": job.get("error"),
                 # attributes custom (slug, ecc.) per la UI
                 "attributes": job.get("attributes", {}) or {},
                 # provenienza: se valorizzato il file viene da una sync SharePoint

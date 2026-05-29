@@ -142,6 +142,11 @@ export default function StoresPage() {
                         </td>
                         <td className="px-2 py-2.5 text-right text-zinc-600 dark:text-zinc-400">
                           {s.file_counts?.total ?? 0}
+                          {(s.file_counts?.failed ?? 0) > 0 && (
+                            <span className="ml-1.5 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:bg-red-950/30 dark:text-red-400">
+                              {s.file_counts.failed} falliti
+                            </span>
+                          )}
                         </td>
                         <td className="px-2 py-2.5 text-xs text-zinc-500 dark:text-zinc-400">
                           {new Date(s.created_at * 1000).toLocaleDateString("it-IT", {

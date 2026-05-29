@@ -16,6 +16,7 @@ import {
   Pencil,
   Plug,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
@@ -63,6 +64,8 @@ type StoreFile = {
   filename: string;
   status: string;
   num_chunks: number;
+  /** motivo del fallimento (se status === "FAILED") */
+  error?: string | null;
   created_at?: number;
   usage_bytes?: number;
   attributes?: Record<string, unknown>;
@@ -184,9 +187,11 @@ const FILES_PAGE_SIZE = 100;
 function FilesTable({
   rows,
   onDelete,
+  onRetry,
 }: {
   rows: StoreFile[];
   onDelete: (f: StoreFile) => void;
+  onRetry: (f: StoreFile) => void;
 }) {
   const [visible, setVisible] = useState(FILES_PAGE_SIZE);
   const shown = rows.slice(0, visible);
@@ -235,14 +240,31 @@ function FilesTable({
                     "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
                     STATUS_PILL[f.status] || STATUS_PILL.PENDING,
                   )}
+                  title={f.status === "FAILED" ? f.error ?? undefined : undefined}
                 >
                   {f.status === "COMPLETED" && <CheckCircle2 className="size-3" />}
                   {f.status === "PROCESSING" && <Loader2 className="size-3 animate-spin" />}
                   {f.status === "FAILED" && <FileWarning className="size-3" />}
                   {f.status}
                 </span>
+                {f.status === "FAILED" && f.error && (
+                  <div className="mt-1 max-w-[22rem] truncate text-[11px] text-red-600 dark:text-red-400" title={f.error}>
+                    {f.error}
+                  </div>
+                )}
               </td>
               <td className="px-2 py-2.5 text-right">
+                {f.status === "FAILED" && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onRetry(f)}
+                    aria-label="Riprova"
+                    title="Ri-accoda il file (torna in coda per un nuovo tentativo)"
+                  >
+                    <RotateCcw className="size-4 text-zinc-500 hover:text-indigo-600" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -472,6 +494,31 @@ export default function DirectoryDetailPage() {
     if (!confirm(`Rimuovere "${f.filename}" dalla directory?`)) return;
     try {
       await api.delete(`/vector_stores/${dir.vector_store_id}/files/${f.file_id}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleRetry(f: StoreFile) {
+    if (!dir) return;
+    try {
+      await api.post(`/vector_stores/${dir.vector_store_id}/files/${f.file_id}/retry`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleRetryAll() {
+    if (!dir) return;
+    if (!confirm("Ri-accodare tutti i file falliti di questa directory?")) return;
+    try {
+      const r = await api.post<{ requeued: number }>(
+        `/vector_stores/${dir.vector_store_id}/retry-failed`,
+        { slug: dir.slug },
+      );
+      setNotice(`${r?.requeued ?? 0} file ri-accodati.`);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -1034,13 +1081,24 @@ export default function DirectoryDetailPage() {
               </div>
             ) : (
               <>
+                {files.some((f) => f.status === "FAILED") && (
+                  <div className="flex items-center justify-between rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
+                    <span>
+                      {files.filter((f) => f.status === "FAILED").length} file falliti in questa directory.
+                    </span>
+                    <Button variant="outline" size="sm" onClick={handleRetryAll}>
+                      <RotateCcw className="size-4" />
+                      Riprova falliti
+                    </Button>
+                  </div>
+                )}
                 {manualFiles.length > 0 && (
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       <CloudUpload className="size-4" />
                       Caricati a mano · {manualFiles.length}
                     </div>
-                    <FilesTable rows={manualFiles} onDelete={handleDelete} />
+                    <FilesTable rows={manualFiles} onDelete={handleDelete} onRetry={handleRetry} />
                   </div>
                 )}
 
@@ -1054,7 +1112,7 @@ export default function DirectoryDetailPage() {
                       Gestiti dalle sync qui sopra. Eliminandoli a mano tornano al prossimo sync se ancora
                       presenti nella source: per toglierli davvero, elimina la sync.
                     </p>
-                    <FilesTable rows={syncedFiles} onDelete={handleDelete} />
+                    <FilesTable rows={syncedFiles} onDelete={handleDelete} onRetry={handleRetry} />
                   </div>
                 )}
               </>
