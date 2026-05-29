@@ -1,4 +1,5 @@
 import sys
+import re
 import hmac
 import asyncio
 from fastapi import FastAPI
@@ -32,18 +33,31 @@ logger = get_logger(__name__)
 # MCP AUTH (sub-app montata: le Depends dei router non la coprono)
 # ============================================================
 
-class MCPAuthMiddleware:
-    """Applica a /mcp la stessa API key di /v1/* (no-op se SOPHIA_VECTOR_API_KEY è vuota).
+# Path del mount MCP scoped — UNICA fonte di verità: sia app.mount() sia il gate di auth lo
+# derivano da qui, così non possono divergere (un rename del path aggiorna anche l'autenticazione,
+# evitando di lasciare la superficie scoped silenziosamente APERTA).
+_MCP_SCOPED_MOUNT = "/v1/vector_stores/{vsid}/mcp"
+# Path delle superfici MCP da proteggere: /mcp (globale) e quello scoped. Il middleware è montato a
+# livello app → vede il path COMPLETO (non ancora stripped dal Mount): startswith("/mcp") NON
+# coprirebbe il path scoped, che resterebbe APERTO → match esplicito ancorato al boundary.
+_MCP_PATH_RE = re.compile(
+    r"^/(?:mcp|" + re.escape(_MCP_SCOPED_MOUNT.lstrip("/")).replace(r"\{vsid\}", "[^/]+") + r")(?:/|$)"
+)
 
-    Le dependency FastAPI non si applicano alle sub-app montate, quindi proteggiamo /mcp
-    con un middleware ASGI puro (trasparente allo streaming SSE del trasporto MCP). Stessa
+
+class MCPAuthMiddleware:
+    """Applica alle superfici MCP la stessa API key di /v1/* (no-op se SOPHIA_VECTOR_API_KEY è
+    vuota).
+
+    Le dependency FastAPI non si applicano alle sub-app montate, quindi proteggiamo le superfici
+    MCP con un middleware ASGI puro (trasparente allo streaming SSE del trasporto MCP). Stessa
     logica di utils.auth.require_api_key: Bearer + confronto a tempo costante."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope["path"].startswith("/mcp"):
+        if scope["type"] == "http" and _MCP_PATH_RE.match(scope["path"]):
             expected = settings.API_KEY
             # OPTIONS (preflight CORS) lasciato passare; il check vale solo se la key è impostata
             if expected and scope.get("method") != "OPTIONS":
@@ -86,9 +100,10 @@ async def lifespan(app: FastAPI):
         # MCP (/mcp): il trasporto streamable-HTTP richiede il suo session_manager attivo
         # per tutta la vita dell'app. Innestato qui (non sostituisce la supervisione worker).
         if settings.MCP_ENABLED:
-            from routers.mcp import mcp as mcp_server
+            from routers.mcp import mcp as mcp_server, mcp_scoped as mcp_store_server
             await stack.enter_async_context(mcp_server.session_manager.run())
-            logger.info("🔌 MCP server attivo → /mcp (9 tool: search/list_files/get_document/search_by_name/list_* + NLP, + prompt rag_research)")
+            await stack.enter_async_context(mcp_store_server.session_manager.run())
+            logger.info("🔌 MCP server attivo → /mcp (globale) + /v1/vector_stores/{id}/mcp (scoped, store dal path) · tool: corpus_overview/search/list_files/get_document/search_by_name/list_* + NLP, prompt rag_research")
 
         try:
             yield
@@ -152,12 +167,17 @@ app.include_router(schedules_router, dependencies=_v1)
 if settings.NLP_ENABLED:
     app.include_router(nlp_router, dependencies=_v1)
 
-# MCP server (/mcp): espone search + NLP come tool Model Context Protocol per gli agent.
-# Sub-app streamable-HTTP; il session_manager gira nel lifespan, l'auth via MCPAuthMiddleware.
+# MCP server: espone search + NLP come tool Model Context Protocol per gli agent.
+# Due superfici (stesso toolkit, vedi routers/mcp.py):
+#   /mcp                          → globale, vector_store_id come parametro
+#   /v1/vector_stores/{vsid}/mcp  → scoped, vector store fissato dal path (Mount con path-param:
+#                                   il vsid arriva ai tool via ctx.request_context.request)
+# Sub-app streamable-HTTP; i session_manager girano nel lifespan, l'auth via MCPAuthMiddleware.
 if settings.MCP_ENABLED:
-    from routers.mcp import mcp as mcp_server
+    from routers.mcp import mcp as mcp_server, mcp_scoped as mcp_store_server
     app.add_middleware(MCPAuthMiddleware)
     app.mount("/mcp", mcp_server.streamable_http_app())
+    app.mount(_MCP_SCOPED_MOUNT, mcp_store_server.streamable_http_app())
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
