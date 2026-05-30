@@ -14,6 +14,9 @@ requests
 pymongo
 falkordb
 croniter
+# database tz IANA per zoneinfo (SCHEDULER_TZ): i container slim non hanno
+# /usr/share/zoneinfo → senza questo ZoneInfo("Europe/Rome") fallirebbe.
+tzdata
 # entity extraction (M3 knowledge graph). Per CPU-only installare torch da:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch

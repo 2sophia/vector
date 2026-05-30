@@ -23,6 +23,8 @@ type Schedule = {
   cron: string | null;
   next_run: number | null;
   last_run: number | null;
+  /** fuso in cui il backend interpreta il cron (es. "Europe/Rome") */
+  tz?: string | null;
 };
 type Run = {
   type: string;
@@ -43,10 +45,13 @@ const PRESETS: { label: string; cron: string }[] = [
   { label: "Ogni giorno alle 06:00", cron: "0 6 * * *" },
 ];
 
-function fmtTs(ts: number | null | undefined): string {
+// Formatta nel fuso dello scheduler (tz), così "prossima" coincide coi preset
+// (es. "03:00"). Senza tz (backend vecchio) usa il fuso del browser.
+function fmtTs(ts: number | null | undefined, tz?: string | null): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleString("it-IT", {
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
   });
 }
 
@@ -185,8 +190,9 @@ export function AutoSyncPanel({ type = "sharepoint", label = "SharePoint" }: { t
         {/* stato */}
         <div className="flex flex-wrap gap-4 text-xs text-zinc-500 dark:text-zinc-400">
           <span>cron attivo: <span className="font-mono text-zinc-700 dark:text-zinc-300">{sched?.cron || "—"}</span></span>
-          <span>prossima: <span className="font-medium text-zinc-700 dark:text-zinc-300">{sched?.enabled ? fmtTs(sched?.next_run) : "—"}</span></span>
-          <span>ultima: {fmtTs(sched?.last_run)}</span>
+          <span>prossima: <span className="font-medium text-zinc-700 dark:text-zinc-300">{sched?.enabled ? fmtTs(sched?.next_run, sched?.tz) : "—"}</span></span>
+          <span>ultima: {fmtTs(sched?.last_run, sched?.tz)}</span>
+          {sched?.tz && <span>fuso: <span className="text-zinc-700 dark:text-zinc-300">{sched.tz}</span></span>}
         </div>
 
         {/* ultimi run */}
@@ -209,7 +215,7 @@ export function AutoSyncPanel({ type = "sharepoint", label = "SharePoint" }: { t
                       ) : (
                         <AlertTriangle className="size-3.5 text-red-500" />
                       )}
-                      <span className="font-medium">{fmtTs(r.started_at)}</span>
+                      <span className="font-medium">{fmtTs(r.started_at, sched?.tz)}</span>
                       <span className="text-zinc-500 dark:text-zinc-400">
                         {ok
                           ? `${r.detail?.total ?? 0} job sincronizzati`

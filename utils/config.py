@@ -263,6 +263,11 @@ class Settings(BaseSettings):
     # in-app). In dev il backend è :8100, in prod :8003 → override in prod.
     INTERNAL_API_URL: str = "http://127.0.0.1:8100"
     SCHEDULER_POLL_INTERVAL: float = 30.0
+    # Timezone in cui interpretare le espressioni cron: "0 3 * * *" = 03:00 di QUESTA
+    # tz, non UTC (il DST è gestito da zoneinfo). Senza, un container in UTC farebbe
+    # girare il cron 2h più tardi dell'orario scelto in UI. Nome IANA (es. "UTC",
+    # "Europe/Rome", "America/New_York"). next_run resta un epoch assoluto.
+    SCHEDULER_TZ: str = "Europe/Rome"
 
     model_config = {
         "env_prefix": "SOPHIA_VECTOR_",

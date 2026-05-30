@@ -3,7 +3,6 @@
 Lo schedule è per TIPO di source (es. "sharepoint"): quando scatta, lo scheduler
 worker sincronizza tutti i job di quel tipo. I run vengono loggati (ultimi 5).
 """
-from datetime import datetime, timezone
 from typing import Optional
 
 from croniter import croniter
@@ -12,6 +11,8 @@ from pydantic import BaseModel
 
 from utils import get_logger, get_timestamp
 from utils.database import db
+from utils.scheduling import cron_next_run
+from utils.settings import SCHEDULER_TZ
 
 logger = get_logger(__name__)
 
@@ -37,6 +38,7 @@ def _serialize(stype: str, doc: Optional[dict]) -> dict:
         "cron": doc.get("cron"),
         "next_run": doc.get("next_run"),
         "last_run": doc.get("last_run"),
+        "tz": SCHEDULER_TZ,  # in quale fuso è interpretato il cron (per la UI)
     }
 
 
@@ -60,8 +62,7 @@ def set_schedule(stype: str, body: ScheduleUpdate):
     now = get_timestamp()
     update = {"enabled": body.enabled, "cron": cron, "updated_at": now}
     if body.enabled and cron:
-        base = datetime.fromtimestamp(now, tz=timezone.utc)
-        update["next_run"] = int(croniter(cron, base).get_next())
+        update["next_run"] = cron_next_run(cron, now)
     else:
         update["next_run"] = None
 

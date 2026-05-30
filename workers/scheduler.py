@@ -14,13 +14,13 @@ così dalla UI si vede cosa ha fatto ogni esecuzione.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 import httpx
 from croniter import croniter
 
 from utils import get_timestamp
 from utils.database import db
+from utils.scheduling import cron_next_run
 from utils.settings import INTERNAL_API_URL, SCHEDULER_POLL_INTERVAL
 
 logging.basicConfig(level=logging.INFO)
@@ -37,8 +37,8 @@ RUNS_RETENTION = 5
 
 
 def _next_run(cron: str, base_ts: int) -> int:
-    base = datetime.fromtimestamp(base_ts, tz=timezone.utc)
-    return int(croniter(cron, base).get_next())
+    # cron interpretato nella timezone dello scheduler (SCHEDULER_TZ), non in UTC.
+    return cron_next_run(cron, base_ts)
 
 
 def _prune_runs(stype: str) -> None:
