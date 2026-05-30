@@ -886,3 +886,85 @@ def unmark_redundant(collection_name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"unmark_redundant({collection_name}) failed: {e}")
         return {"unmarked": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Outlier semantici (L5, stile SORE) — chunk lontani dal centroide del corpus
+# ---------------------------------------------------------------------------
+
+def find_semantic_outliers(
+    collection_name: str,
+    sim_threshold: float = 0.35,
+    max_points: "int | None" = 4000,
+    sample: int = 25,
+) -> Dict[str, Any]:
+    """SOLA LETTURA: chunk semanticamente lontani dal centroide della collection —
+    candidati off-topic / fuori dominio / rumore (es. un PDF random in un corpus
+    coerente). NON marca e NON cancella: pura diagnostica per la revisione umana.
+
+    Scelta deliberata (vedi cascata di curation, avvertenza #1): l'outlier
+    raro-ma-prezioso NON va buttato in automatico — qui si SEGNALA soltanto, e
+    l'operatore decide (es. usando l'esclusione file). Calcola il centroide come
+    media L2-normalizzata dei vettori dense, poi la cosine similarity di ogni punto
+    col centroide: `sim < sim_threshold` = outlier. Best-effort: degrada a vuoto.
+
+    Ritorna `{points_scanned, outliers, outlier_pct, sim_threshold, mean_sim,
+    samples:[{filename, heading, similarity, point_id}]}` (campioni = i più lontani).
+    """
+    import numpy as np
+
+    vecs, meta = [], []
+    offset = None
+    try:
+        while True:
+            pts, offset = qdrant_client.scroll(
+                collection_name=collection_name, limit=512, offset=offset,
+                with_payload=["filename", "headings"], with_vectors=["dense"],
+            )
+            for p in pts:
+                v = p.vector.get("dense") if isinstance(p.vector, dict) else p.vector
+                if v is None:
+                    continue
+                vecs.append(v)
+                pl = p.payload or {}
+                hs = pl.get("headings") or []
+                meta.append((str(p.id), pl.get("filename"), hs[0] if hs else None))
+            if offset is None:
+                break
+            if max_points and len(vecs) >= max_points:
+                break
+    except Exception as e:
+        logger.warning(f"find_semantic_outliers scroll({collection_name}) failed: {e}")
+        return {"points_scanned": 0, "outliers": 0, "outlier_pct": 0.0,
+                "sim_threshold": sim_threshold, "mean_sim": 0.0, "samples": []}
+
+    n = len(vecs)
+    if n < 3:
+        return {"points_scanned": n, "outliers": 0, "outlier_pct": 0.0,
+                "sim_threshold": sim_threshold, "mean_sim": 0.0, "samples": []}
+
+    mat = np.asarray(vecs, dtype=np.float32)
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    mat = mat / norms
+    centroid = mat.mean(axis=0)
+    cn = np.linalg.norm(centroid) or 1.0
+    centroid = centroid / cn
+    sims = mat @ centroid  # cosine col centroide (vettori già unitari)
+
+    mask = sims < sim_threshold
+    n_out = int(mask.sum())
+    order = np.argsort(sims)  # i più lontani in testa
+    samples = []
+    for idx in order[:sample]:
+        pid, fn, hd = meta[idx]
+        samples.append({"point_id": pid, "filename": fn, "heading": hd,
+                        "similarity": round(float(sims[idx]), 3)})
+    return {
+        "points_scanned": n,
+        "outliers": n_out,
+        "outlier_pct": round(100 * n_out / n, 1) if n else 0.0,
+        "sim_threshold": sim_threshold,
+        "mean_sim": round(float(sims.mean()), 3),
+        "samples": samples,
+    }

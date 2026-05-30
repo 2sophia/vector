@@ -37,8 +37,9 @@ from utils.settings import GLINER_ENABLED, CLASSIFIER_ENABLED, TABULAR_ENABLED
 # Estrazione entità: i modelli PESANTI (GLiNER/relex/classifier) e Whisper vivono nel
 # BACKEND e si chiamano via model_client (HTTP) → una sola copia, nessun peso qui.
 from utils.curation import body_hash, register_document_bodies, purge_file_bodies
+from utils.quality import score_chunk
 from utils.store_schema import get_effective_schema
-from utils.settings import CURATION_ENABLED
+from utils.settings import CURATION_ENABLED, QUALITY_ENABLED
 
 # ---------------------------------------------------------------------------
 # Config (centralizzata in utils/config, prefisso SOPHIA_VECTOR_)
@@ -435,6 +436,13 @@ async def _process_job(job: Dict[str, Any]):
             cats = chunk_categories[i] if i < len(chunk_categories) else []
             if cats:
                 payload["category"] = cats
+            # quality scoring euristico (L1/L2): segnale additivo, filtrabile opt-in a
+            # search-time (utils/quality.py). Best-effort: lo score neutro non penalizza.
+            if QUALITY_ENABLED:
+                q = score_chunk(doc["text"], doc["headings"])
+                payload["quality_score"] = q["quality_score"]
+                if q["quality_flags"]:
+                    payload["quality_flags"] = q["quality_flags"]
             point_id = str(uuid.uuid4())
             points.append(PointStruct(
                 id=point_id,

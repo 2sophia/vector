@@ -43,11 +43,39 @@ type RedundancyStats = {
   marked?: number;
   reset?: boolean;
 };
+type OutlierSample = {
+  point_id: string;
+  filename?: string | null;
+  heading?: string | null;
+  similarity: number;
+};
+type OutlierStats = {
+  points_scanned?: number;
+  outliers?: number;
+  outlier_pct?: number;
+  sim_threshold?: number;
+  mean_sim?: number;
+  samples?: OutlierSample[];
+};
+type ConflictSample = {
+  head: string;
+  head_type?: string;
+  relation?: string;
+  values?: string[];
+  value_count?: number;
+};
+type ConflictStats = {
+  graph_enabled?: boolean;
+  conflicts?: number;
+  samples?: ConflictSample[];
+};
 type OptimizeResult = {
   dry_run: boolean;
   graph: GraphStats;
   curation: CurationStats;
   redundancy?: RedundancyStats | null;
+  outliers?: OutlierStats | null;
+  conflicts?: ConflictStats | null;
 };
 
 export default function OptimizePage() {
@@ -59,6 +87,8 @@ export default function OptimizePage() {
   const [dropNumeric, setDropNumeric] = useState(true);
   const [denseThreshold, setDenseThreshold] = useState(0.96);
   const [markRedundant, setMarkRedundant] = useState(false);
+  const [includeOutliers, setIncludeOutliers] = useState(false);
+  const [includeConflicts, setIncludeConflicts] = useState(false);
 
   const [busy, setBusy] = useState<false | "preview" | "apply" | "reset">(false);
   const [result, setResult] = useState<OptimizeResult | null>(null);
@@ -73,7 +103,8 @@ export default function OptimizePage() {
       const qs =
         `min_score=${minScore}&min_entity_len=${minLen}` +
         `&drop_numeric=${dropNumeric}&dense_threshold=${denseThreshold}` +
-        `&apply_redundancy=${applyRed}&reset_redundancy=${reset}&dry_run=${dryRun}`;
+        `&apply_redundancy=${applyRed}&reset_redundancy=${reset}&dry_run=${dryRun}` +
+        `&include_outliers=${includeOutliers}&include_conflicts=${includeConflicts}`;
       const flags =
         `--min-score ${minScore} --min-entity-len ${minLen}` +
         `${dropNumeric ? " --drop-numeric" : ""} --sim ${denseThreshold}` +
@@ -114,6 +145,19 @@ export default function OptimizePage() {
             lines.push(`✓ marcati ${rd.marked} ridondanti (soppressi a search-time)`);
           if (rd.reset) lines.push("✓ marcatura ridondanti azzerata");
         }
+        const ol = r.outliers;
+        if (ol && ol.points_scanned) {
+          lines.push(
+            `→ outlier semantici (sim < ${ol.sim_threshold}): ${ol.outliers}/${ol.points_scanned} ` +
+              `(${ol.outlier_pct}%, sim media ${ol.mean_sim}) — diagnostica, nulla rimosso`,
+          );
+        }
+        const cf = r.conflicts;
+        if (cf && cf.graph_enabled) {
+          lines.push(
+            `→ conflitti relazione (valori multipli): ${cf.conflicts} candidati da rivedere`,
+          );
+        }
         setLog((prev) => [...prev, ...lines, ""]);
       } catch (e) {
         setError(String(e));
@@ -122,11 +166,13 @@ export default function OptimizePage() {
         setBusy(false);
       }
     },
-    [vsid, minScore, minLen, dropNumeric, denseThreshold, markRedundant],
+    [vsid, minScore, minLen, dropNumeric, denseThreshold, markRedundant, includeOutliers, includeConflicts],
   );
 
   const g = result?.graph;
   const cur = result?.curation;
+  const ol = result?.outliers;
+  const cf = result?.conflicts;
 
   return (
     <div className="px-8 py-10">
@@ -263,6 +309,43 @@ export default function OptimizePage() {
                 {markRedundant ? "Attivo" : "Disattivo"}
               </Button>
             </div>
+
+            {/* diagnostica outlier semantici (sola lettura) */}
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-1">
+                <Label>Outlier semantici (diagnostica)</Label>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Segnala i chunk lontani dal centroide del corpus (candidati off-topic).
+                  Sola lettura: non rimuove nulla, l&apos;outlier raro-ma-prezioso lo decidi tu.
+                </p>
+              </div>
+              <Button
+                variant={includeOutliers ? "default" : "outline"}
+                size="sm"
+                onClick={() => setIncludeOutliers((v) => !v)}
+              >
+                {includeOutliers ? "Attivo" : "Disattivo"}
+              </Button>
+            </div>
+
+            {/* diagnostica conflitti relazione (sola lettura) */}
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-1">
+                <Label>Conflitti relazione (diagnostica)</Label>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Coppie (entità, relazione) con valori multipli sul grafo: candidati
+                  conflitto da rivedere. NON è una contraddizione confermata (i valori
+                  multipli sono spesso legittimi) — solo un segnale per l&apos;umano.
+                </p>
+              </div>
+              <Button
+                variant={includeConflicts ? "default" : "outline"}
+                size="sm"
+                onClick={() => setIncludeConflicts((v) => !v)}
+              >
+                {includeConflicts ? "Attivo" : "Disattivo"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -364,6 +447,110 @@ export default function OptimizePage() {
             </CardContent>
           </Card>
         )}
+
+        {/* OUTLIER SEMANTICI (diagnostica) */}
+        {ol && ol.points_scanned ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Outlier semantici</CardTitle>
+              <CardDescription>
+                Chunk lontani dal centroide del corpus — candidati off-topic. Sola
+                lettura: per rimuoverli usa l&apos;esclusione file, non si cancella nulla qui.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Punti analizzati" value={ol.points_scanned} />
+                <Stat label="Outlier" value={ol.outliers} tone="amber" />
+                <Stat label="% outlier" value={`${ol.outlier_pct ?? 0}%`} tone="amber" />
+                <Stat label="Sim media" value={ol.mean_sim} />
+              </div>
+              {ol.samples && ol.samples.length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
+                  <table className="w-full text-xs">
+                    <thead className="bg-zinc-50 text-left text-zinc-500 dark:bg-zinc-900/50 dark:text-zinc-400">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">File</th>
+                        <th className="px-3 py-2 font-medium">Sezione</th>
+                        <th className="px-3 py-2 text-right font-medium">Similarità</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {ol.samples.map((s) => (
+                        <tr key={s.point_id}>
+                          <td className="px-3 py-2 font-medium text-zinc-800 dark:text-zinc-200">
+                            {s.filename || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-zinc-500 dark:text-zinc-400">
+                            {s.heading || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                            {s.similarity.toFixed(3)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {/* CONFLITTI RELAZIONE (diagnostica) */}
+        {cf && cf.graph_enabled ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Conflitti relazione
+                <span className="ml-2 text-sm font-normal text-amber-600 dark:text-amber-400">
+                  {cf.conflicts ?? 0} candidati
+                </span>
+              </CardTitle>
+              <CardDescription>
+                Coppie (entità, relazione) con valori multipli sul grafo. Da rivedere a
+                mano: un valore multiplo è spesso legittimo, NON è una contraddizione
+                confermata. Nessun modello, nessuna cancellazione.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {cf.samples && cf.samples.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {cf.samples.map((c, i) => (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-800 dark:bg-zinc-900"
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-zinc-800 dark:text-zinc-100">
+                          {c.head}
+                        </span>
+                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400">
+                          {c.relation}
+                        </span>
+                        <span className="text-zinc-400">→ {c.value_count} valori:</span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {(c.values || []).map((v, j) => (
+                          <span
+                            key={j}
+                            className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
+                          >
+                            {v}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Nessun candidato conflitto rilevato.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </div>
   );

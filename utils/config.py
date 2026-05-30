@@ -236,6 +236,22 @@ class Settings(BaseSettings):
     CURATION_BOILERPLATE_RATIO: float = 0.5
     CURATION_BOILERPLATE_MIN_DOCS: int = 5
 
+    # --- Quality scoring euristico dei chunk (L1/L2 della cascata di curation) ---
+    # Segnale ADDITIVO a costo ~zero (nessun modello, nessuna rete): ogni chunk
+    # prende un `quality_score` ∈ [0,1] (1 = buono) in `utils/quality.py`, salvato
+    # nel payload Qdrant. Becca gibberish/OCR-junk, frammenti vuoti/cortissimi,
+    # testo super-ripetitivo o simbolo-pesante — la spazzatura che NON merita di
+    # saturare i top-K. "Solo migliorativo": NON scarta nulla a ingestion (si
+    # indicizza sempre), il filtro è OPT-IN a search-time.
+    #   QUALITY_ENABLED        → calcola e salva lo score a ingestion (off = invariato).
+    #   QUALITY_MIN_WORDS      → sotto N parole un chunk è "short" (penalità gentile).
+    #   QUALITY_SEARCH_MIN     → soglia di DEFAULT del filtro a search-time. 0.0 = no-op
+    #                            (comportamento storico). Alzala (es. 0.3) per togliere
+    #                            il junk dai risultati; sovrascrivibile per-query.
+    QUALITY_ENABLED: bool = True
+    QUALITY_MIN_WORDS: int = 4
+    QUALITY_SEARCH_MIN: float = 0.0
+
     # --- Ingestion worker (tuning; ex env legacy os.getenv senza prefisso) ---
     INGEST_BATCH_SIZE: int = 64
     INGEST_MAX_CONCURRENT_JOBS: int = 1

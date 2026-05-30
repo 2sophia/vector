@@ -25,6 +25,7 @@ from utils.settings import (
     CURATION_ENABLED,
     CURATION_BOILERPLATE_RATIO,
     CURATION_BOILERPLATE_MIN_DOCS,
+    QUALITY_SEARCH_MIN,
 )
 from utils.curation import body_hash, boilerplate_hashes
 
@@ -248,6 +249,24 @@ def _suppress_redundant(rows):
     return kept or rows
 
 
+def _suppress_low_quality(rows, min_quality):
+    """Scarta i chunk con `quality_score` < soglia (gibberish/junk, vedi
+    utils/quality.py). OPT-IN: min_quality<=0 → no-op (comportamento storico). I
+    chunk SENZA score (indicizzati prima del layer) NON vengono mai filtrati →
+    backward-safe. Failsafe: se filtrasse tutto, ritorna i risultati originali."""
+    if not rows or not min_quality or min_quality <= 0:
+        return rows
+    kept = []
+    for r in rows:
+        q = (r.get("payload") or {}).get("quality_score")
+        if q is None or q >= min_quality:
+            kept.append(r)
+    removed = len(rows) - len(kept)
+    if removed:
+        logger.info(f"[quality] soppressi {removed} chunk sotto soglia ({min_quality})")
+    return kept or rows
+
+
 # ================== VECTOR SEARCH ENDPOINT ==================
 
 @router.post("/{vector_store_id}/search", response_model=SearchResponse)
@@ -306,6 +325,12 @@ def search_vector_store(vector_store_id: str, search_data: VectorSearch):
         result_rows = _suppress_boilerplate(vector_store_id, result_rows)
         # ========== Dedup semantico: sopprimi i near-duplicate marcati ==========
         result_rows = _suppress_redundant(result_rows)
+        # ========== Filtro qualità (opt-in): scarta gibberish/junk sotto soglia ==========
+        ro = search_data.ranking_options
+        min_quality = getattr(ro, "min_quality", None) if ro else None
+        if min_quality is None:
+            min_quality = QUALITY_SEARCH_MIN
+        result_rows = _suppress_low_quality(result_rows, min_quality)
 
         # ========== STEP 9: BUILD RESPONSE ==========
         search_results = []

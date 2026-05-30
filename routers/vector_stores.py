@@ -16,9 +16,12 @@ from utils.filesystem import get_file_metadata, get_file_path, delete_file_from_
 from utils.qdrant import (
     create_qdrant_collection, delete_qdrant_points,
     find_redundant_clusters, mark_redundant, unmark_redundant,
-    semantic_clusters, count_points_by_slug,
+    find_semantic_outliers, semantic_clusters, count_points_by_slug,
 )
-from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph, graph_stats
+from utils.falkor import (
+    delete_graph, purge_file_graph, export_graph, optimize_graph, graph_stats,
+    find_relation_conflicts,
+)
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
 from utils.exclusions import exclude_file, unexclude_file, list_excluded, is_excluded
 from utils.store_schema import (
@@ -330,6 +333,9 @@ def optimize_vector_store(
     include_redundancy: bool = Query(default=True),
     apply_redundancy: bool = Query(default=False),
     reset_redundancy: bool = Query(default=False),
+    include_outliers: bool = Query(default=False),
+    outlier_sim_threshold: float = Query(default=0.35, ge=0.0, le=1.0),
+    include_conflicts: bool = Query(default=False),
     dry_run: bool = Query(default=False),
 ):
     """Ottimizza il vector store SENZA re-ingest, on-demand e idempotente.
@@ -339,7 +345,14 @@ def optimize_vector_store(
     o solo numerazioni) e quelle rimaste orfane. Filtri agnostici (nessun dominio
     hardcoded). Riporta anche le metriche di data curation (già coerenti per
     costruzione: si aggiornano a ogni ingest). Con `dry_run=true` non cancella
-    nulla, conta soltanto cosa taglierebbe."""
+    nulla, conta soltanto cosa taglierebbe.
+
+    Diagnostiche SOLA LETTURA opt-in (non marcano né cancellano nulla):
+    `include_outliers` → chunk semanticamente lontani dal centroide (candidati
+    off-topic, vedi find_semantic_outliers); `include_conflicts` → coppie
+    (entità, relazione) con valori multipli sul grafo (candidati conflitto da
+    rivedere, find_relation_conflicts). Sono segnali per l'operatore, mai azioni
+    automatiche (l'outlier raro-ma-prezioso non si butta in automatico)."""
     if not vector_store_id.startswith("vs_"):
         raise HTTPException(status_code=404, detail="Vector store not found")
     collections = [c.name for c in qdrant_client.get_collections().collections]
@@ -369,6 +382,12 @@ def optimize_vector_store(
             redundancy = mark_redundant(vector_store_id, dense_threshold=dense_threshold)
         else:
             redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
+    # Diagnostiche additive (sola lettura): off di default per non appesantire l'optimize.
+    outliers = (
+        find_semantic_outliers(vector_store_id, sim_threshold=outlier_sim_threshold)
+        if include_outliers else None
+    )
+    conflicts = find_relation_conflicts(vector_store_id) if include_conflicts else None
     if not dry_run:
         # graph cleanup / dedup non muovono points_count → invalida l'overview cachato
         overview_cache.delete_one({"_id": vector_store_id})
@@ -379,6 +398,8 @@ def optimize_vector_store(
         "graph": graph,
         "curation": curation,
         "redundancy": redundancy,
+        "outliers": outliers,
+        "conflicts": conflicts,
     }
 
 

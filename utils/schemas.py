@@ -85,6 +85,12 @@ class RankingOptions(BaseModel):
     mmr_diversity: Optional[float] = None           # MMR anti near-duplicate: 0=pura rilevanza/off, 0.3–0.5 diversifica
     group_by_file_max: Optional[int] = None         # max N chunk per documento nei risultati. None/0 = off (es. 2)
 
+    # Filtro qualità (L1/L2): scarta dai risultati i chunk con quality_score < soglia
+    # (gibberish/OCR-junk/frammenti, vedi utils/quality.py). None → usa il default di
+    # config (QUALITY_SEARCH_MIN, 0.0 = no-op). I chunk senza score (indicizzati prima
+    # del layer) NON vengono mai filtrati. Failsafe: non svuota i risultati.
+    min_quality: Optional[float] = None
+
 
 class VectorSearch(BaseModel):
     query: str  # Ora accetta stringa

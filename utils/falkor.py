@@ -99,6 +99,59 @@ def graph_stats(vector_store_id: str) -> Dict[str, Any]:
     }
 
 
+def find_relation_conflicts(
+    vector_store_id: str, limit: int = 50, max_values: int = 8
+) -> Dict[str, Any]:
+    """SOLA LETTURA: coppie (entità, tipo-relazione) che puntano a PIÙ valori
+    distinti — candidati conflitto da rivedere. Non-LLM, agnostico: sfrutta solo le
+    relazioni tipizzate già estratte (:Entity)-[:REL {type}]->(:Entity).
+
+    ATTENZIONE (coerente con lo SOTA: anche WikiCollide fa AUROC ~75% → umano nel
+    loop): una relazione MULTIVALORE è spesso legittima (un soggetto può avere più
+    oggetti per la stessa relazione). Qui NON si asserisce una contraddizione e NON
+    si cancella nulla: si SEGNALANO le coppie con valori multipli perché l'operatore
+    le verifichi. È il primo gradino del type-5 (verità/coerenza) senza modelli.
+
+    Ritorna `{graph_enabled, conflicts, samples:[{head, head_type, relation,
+    values:[...], value_count}]}`. Best-effort: degrada a graph_enabled=False."""
+    g = _graph(vector_store_id)
+    if g is None:
+        return {"graph_enabled": False, "conflicts": 0, "samples": []}
+    try:
+        total = g.query(
+            """
+            MATCH (h:Entity)-[r:REL]->(t:Entity)
+            WITH h, r.type AS rtype, count(DISTINCT t.id) AS n
+            WHERE n >= 2
+            RETURN count(*)
+            """
+        )
+        conflicts = total.result_set[0][0] if total.result_set else 0
+
+        rows = g.query(
+            """
+            MATCH (h:Entity)-[r:REL]->(t:Entity)
+            WITH h, r.type AS rtype,
+                 collect(DISTINCT t.name) AS values, count(DISTINCT t.id) AS n
+            WHERE n >= 2
+            RETURN h.name AS head, h.type AS htype, rtype, values, n
+            ORDER BY n DESC
+            LIMIT $limit
+            """,
+            {"limit": limit},
+        ).result_set or []
+
+        samples = []
+        for head, htype, rtype, values, n in rows:
+            vals = [v for v in (values or []) if v][:max_values]
+            samples.append({"head": head, "head_type": htype, "relation": rtype,
+                            "values": vals, "value_count": int(n)})
+        return {"graph_enabled": True, "conflicts": int(conflicts), "samples": samples}
+    except Exception as e:
+        logger.warning(f"find_relation_conflicts({vector_store_id}) failed: {e}")
+        return {"graph_enabled": True, "conflicts": 0, "samples": [], "error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Purge (re-ingest sicuro)
 # ---------------------------------------------------------------------------

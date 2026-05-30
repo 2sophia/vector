@@ -114,6 +114,7 @@ export default function SearchPage() {
   const [neighbors, setNeighbors] = useState(20);
   const [dfMax, setDfMax] = useState(0.5);
   const [slug, setSlug] = useState("");
+  const [minQuality, setMinQuality] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -160,6 +161,7 @@ export default function SearchPage() {
         graph_df_max: dfMax,
       };
       if (slug.trim()) body.filters = { sophia_directory_slug: slug.trim() };
+      if (minQuality > 0) body.ranking_options = { min_quality: minQuality };
       const res = await api.post<SearchResponse>(`/vector_stores/${storeId}/search`, body);
       setResults(res.data || []);
       setRaw(res);
@@ -186,6 +188,7 @@ export default function SearchPage() {
         graph_df_max: dfMax,
       };
       if (slug.trim()) body.filters = { sophia_directory_slug: slug.trim() };
+      if (minQuality > 0) body.ranking_options = { min_quality: minQuality };
       const res = await api.post<{ graph: SubGraph }>(
         `/vector_stores/${storeId}/search/graph`,
         body,
@@ -197,7 +200,7 @@ export default function SearchPage() {
       setGraphLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeId, query, topK, graphExpand, neighbors, dfMax, slug]);
+  }, [storeId, query, topK, graphExpand, neighbors, dfMax, slug, minQuality]);
 
   // alla prima apertura della vista grafo (per la query corrente) carica il sottografo
   useEffect(() => {
@@ -366,6 +369,11 @@ export default function SearchPage() {
                   <Label htmlFor="adv-slug" className="text-xs">Filtro directory (slug)</Label>
                   <Input id="adv-slug" value={slug} placeholder="(tutte)"
                     onChange={(e) => setSlug(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="adv-quality" className="text-xs">Qualità minima (0 = off)</Label>
+                  <Input id="adv-quality" type="number" min={0} max={1} step={0.05} value={minQuality}
+                    onChange={(e) => setMinQuality(Number(e.target.value) || 0)} />
                 </div>
               </div>
             )}
