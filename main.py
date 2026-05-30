@@ -21,6 +21,7 @@ from routers import (
     directories_router,
     schedules_router,
     nlp_router,
+    kb_router,
 )
 
 from utils.worker import watch_process, stop_event, worker_procs, terminate_worker_group
@@ -162,6 +163,9 @@ app.include_router(search_router, dependencies=_v1)
 app.include_router(sources_router, dependencies=_v1)
 app.include_router(directories_router, dependencies=_v1)
 app.include_router(schedules_router, dependencies=_v1)
+# KB surface (/v1/vector_stores/{id}/kb/*): i tool MCP via REST, con access control
+# per-directory obbligatorio. Per consumer (agent) che non possono usare l'MCP.
+app.include_router(kb_router, dependencies=_v1)
 # Endpoint NLP (/v1/nlp/*): opt-in. Il backend è "owner" dei modelli (lazy, in-process);
 # worker e client esterni li usano via HTTP — una sola copia. Spegnibile via env.
 if settings.NLP_ENABLED:

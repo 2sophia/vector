@@ -58,6 +58,34 @@ _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=Tr
 _PROV_KEYS = ("page_numbers", "headings", "category", "chunk_index")
 
 
+# --------------------------------------------------------------------------- #
+# Access control per-directory (lo "scope" = lista di slug consentiti).
+# Sulle query Qdrant diventa un must-filter ($or sugli slug); sui cataloghi
+# (lista file da Mongo) un match sull'attributo. None/[] = nessuno scope
+# (comportamento storico delle superfici admin/MCP). È OPT-IN: i tool restano
+# identici se `directories` non è passato; la superficie REST /kb lo rende
+# obbligatorio (vedi routers/kb.py) per l'enforcement non-bypassabile.
+# --------------------------------------------------------------------------- #
+
+def _dir_clause(directories: Optional[List[str]]) -> Optional[Dict[str, Any]]:
+    """Clause `filters` (stile build_qdrant_filter) per lo scope directory."""
+    dirs = [d for d in (directories or []) if d]
+    if not dirs:
+        return None
+    if len(dirs) == 1:
+        return {"sophia_directory_slug": dirs[0]}
+    return {"$or": [{"sophia_directory_slug": d} for d in dirs]}
+
+
+def _in_dirs(attributes: Optional[Dict[str, Any]], directories: Optional[List[str]]) -> bool:
+    """True se il file (dai suoi attributes) è in una delle directory consentite.
+    Scope vuoto → sempre True (nessun filtro)."""
+    allowed = {d for d in (directories or []) if d}
+    if not allowed:
+        return True
+    return ((attributes or {}).get("sophia_directory_slug")) in allowed
+
+
 def _err(e: Exception, **extra: Any) -> Dict[str, Any]:
     """Errore leggibile per l'agent + `status` machine-readable (404 → not_found, resto →
     backend_error) così l'agent decide se correggere l'id o riprovare.
@@ -85,6 +113,7 @@ async def _core_search(
     directory_slug: Optional[str] = None,
     graph_expand: bool = False,
     score_threshold: Optional[float] = None,
+    directories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     from routers.search import search_vector_store  # import locale: evita cicli all'avvio
 
@@ -94,6 +123,11 @@ async def _core_search(
         clauses.append({"filename": filename})
     if directory_slug:
         clauses.append({"sophia_directory_slug": directory_slug})
+    # access control: lo scope directory è un must-filter (ANDed) → pre-filtro Qdrant,
+    # vale anche per i canali grafo/lessicale. NON è bypassabile post-hoc.
+    dir_clause = _dir_clause(directories)
+    if dir_clause:
+        clauses.append(dir_clause)
     filters: Dict[str, Any] = (
         clauses[0] if len(clauses) == 1 else {"$and": clauses} if clauses else {}
     )
@@ -141,8 +175,39 @@ async def _core_search(
     return {"query": query, "vector_store_id": vector_store_id, "count": len(hits), "results": hits}
 
 
-async def _core_corpus_overview(vector_store_id: str, refresh: bool = False) -> Dict[str, Any]:
+async def _core_corpus_overview(
+    vector_store_id: str, refresh: bool = False, directories: Optional[List[str]] = None
+) -> Dict[str, Any]:
     from routers.vector_stores import vector_store_overview
+
+    # Vista SCOPED (access control): l'overview store-wide espone i `topics` (cluster
+    # globali) coi nomi file di TUTTE le directory → leak. Con uno scope attivo ritorno
+    # una vista sicura — SOLO le directory consentite con conteggi (file da Mongo, punti
+    # da Qdrant count filtrato per slug), niente clustering/near-dup/grafo store-wide.
+    allowed = [d for d in (directories or []) if d]
+    if allowed:
+        from utils.qdrant import count_points_by_slug
+        try:
+            dres = await _core_list_directories(vector_store_id, directories=allowed)
+            meta = {d.get("slug"): d for d in dres.get("directories", [])}
+            dirs, tot_points, tot_files = [], 0, 0
+            for slug in allowed:
+                pts = await asyncio.to_thread(count_points_by_slug, vector_store_id, slug)
+                m = meta.get(slug, {})
+                fc = m.get("file_count") or 0
+                tot_points += pts
+                tot_files += fc
+                dirs.append({
+                    "slug": slug, "name": m.get("name") or slug,
+                    "file_count": fc, "points": pts, "properties": m.get("properties"),
+                })
+            return {
+                "vector_store_id": vector_store_id, "scoped": True,
+                "directories": dirs,
+                "counts": {"directories": len(dirs), "files": tot_files, "points": tot_points},
+            }
+        except Exception as e:
+            return _err(e, vector_store_id=vector_store_id)
 
     try:
         ov = await asyncio.to_thread(vector_store_overview, vector_store_id, refresh=refresh)
@@ -210,13 +275,16 @@ async def _core_list_vector_stores() -> Dict[str, Any]:
     return {"count": len(stores), "vector_stores": stores}
 
 
-async def _core_list_directories(vector_store_id: Optional[str] = None) -> Dict[str, Any]:
+async def _core_list_directories(
+    vector_store_id: Optional[str] = None, directories: Optional[List[str]] = None
+) -> Dict[str, Any]:
     from routers.directories import list_directories as _list
 
     try:
         res = await _list(vector_store_id=vector_store_id)
     except Exception as e:
         return _err(e, directories=[])
+    allowed = {d for d in (directories or []) if d}
     dirs = [
         {
             "id": getattr(d, "id", None),
@@ -229,6 +297,8 @@ async def _core_list_directories(vector_store_id: Optional[str] = None) -> Dict[
             "properties": getattr(d, "properties", None),
         }
         for d in res.get("data", [])
+        # access control: con lo scope attivo, mostra SOLO le directory consentite.
+        if not allowed or getattr(d, "slug", None) in allowed
     ]
     return {"count": len(dirs), "directories": dirs}
 
@@ -245,7 +315,8 @@ def _project_file(f: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _core_list_files(
-    vector_store_id: str, name_contains: Optional[str] = None, limit: int = 100
+    vector_store_id: str, name_contains: Optional[str] = None, limit: int = 100,
+    directories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     from routers.vector_stores import list_vector_store_files
 
@@ -258,7 +329,8 @@ async def _core_list_files(
     files = [
         _project_file(f)
         for f in res.get("data", [])
-        if not needle or needle in (f.get("filename") or "").lower()
+        if (not needle or needle in (f.get("filename") or "").lower())
+        and _in_dirs(f.get("attributes"), directories)  # access control
     ]
     return {
         "vector_store_id": vector_store_id,
@@ -268,7 +340,8 @@ async def _core_list_files(
 
 
 async def _core_search_by_name(
-    vector_store_id: str, name: str, limit: int = 50
+    vector_store_id: str, name: str, limit: int = 50,
+    directories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     from routers.vector_stores import list_vector_store_files
 
@@ -282,6 +355,7 @@ async def _core_search_by_name(
         _project_file(f)
         for f in res.get("data", [])
         if needle and needle in (f.get("filename") or "").lower()
+        and _in_dirs(f.get("attributes"), directories)  # access control
     ]
     return {
         "vector_store_id": vector_store_id,
@@ -296,6 +370,7 @@ async def _core_get_document(
     max_chars: int = 20000,
     from_chunk: Optional[int] = None,
     to_chunk: Optional[int] = None,
+    directories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     from qdrant_client import models
     from utils import qdrant_client
@@ -309,9 +384,16 @@ async def _core_get_document(
             return {"error": f"vector store '{vector_store_id}' inesistente",
                     "status": "not_found", "file_id": file_id, "text": ""}
 
-        flt = models.Filter(
-            must=[models.FieldCondition(key="file_id", match=models.MatchValue(value=file_id))]
-        )
+        # access control: oltre al file_id, vincola lo scroll alle directory consentite
+        # → un file_id fuori scope non restituisce punti = not_found (niente leak).
+        must = [models.FieldCondition(key="file_id", match=models.MatchValue(value=file_id))]
+        allowed = [d for d in (directories or []) if d]
+        if allowed:
+            must.append(models.Filter(should=[
+                models.FieldCondition(key="sophia_directory_slug", match=models.MatchValue(value=d))
+                for d in allowed
+            ]))
+        flt = models.Filter(must=must)
         points, _ = qdrant_client.scroll(
             collection_name=vector_store_id, scroll_filter=flt,
             limit=10000, with_payload=True, with_vectors=False,
