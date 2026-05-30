@@ -77,6 +77,14 @@ type OptimizeResult = {
   outliers?: OutlierStats | null;
   conflicts?: ConflictStats | null;
 };
+// L'optimize gira come job asincrono: POST ritorna {job_id, running}, poi si fa
+// polling sul GET finché completed/failed (il calcolo può durare minuti → no timeout).
+type OptimizeJobResponse = {
+  job_id: string;
+  status: "running" | "completed" | "failed";
+  result?: OptimizeResult | null;
+  error?: string | null;
+};
 
 export default function OptimizePage() {
   const params = useParams<{ id: string }>();
@@ -111,7 +119,24 @@ export default function OptimizePage() {
         `${applyRed ? " --mark-redundant" : ""}${reset ? " --reset-redundant" : ""}` +
         `${dryRun ? " --dry-run" : ""}`;
       try {
-        const r = await api.post<OptimizeResult>(`/vector_stores/${vsid}/optimize?${qs}`);
+        // 1) avvia il job e fai polling finché è pronto (può durare minuti)
+        const started = await api.post<OptimizeJobResponse>(
+          `/vector_stores/${vsid}/optimize?${qs}`,
+        );
+        let job = started;
+        const startedAt = performance.now();
+        const TIMEOUT_MS = 20 * 60 * 1000; // oltre: si molla il polling (il job continua lato server)
+        while (job.status === "running") {
+          if (performance.now() - startedAt > TIMEOUT_MS)
+            throw new Error("timeout polling: il job è ancora in corso, riprova tra poco");
+          await new Promise((res) => setTimeout(res, 2000));
+          job = await api.get<OptimizeJobResponse>(
+            `/vector_stores/${vsid}/optimize/${started.job_id}`,
+          );
+        }
+        if (job.status === "failed" || !job.result)
+          throw new Error(job.error || "ottimizzazione fallita");
+        const r = job.result;
         setResult(r);
         const g = r.graph;
         const lines: string[] = [`$ optimize ${flags}`];

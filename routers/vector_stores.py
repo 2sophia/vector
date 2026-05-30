@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import aiofiles
 import aiofiles.os
 
-from fastapi import HTTPException, Query, APIRouter, Body, Header
+from fastapi import HTTPException, Query, APIRouter, Body, Header, BackgroundTasks
 
 from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
@@ -59,6 +59,13 @@ logger = get_logger(__name__)
 ingestion_jobs = db["ingestion_jobs"]
 directories_coll = db["directories"]
 overview_cache = db["vector_overview_cache"]
+optimize_jobs = db["optimize_jobs"]
+# L'optimize completo (near-duplicate O(N) round-trip Qdrant + graph scan) può durare
+# minuti su collection grandi → va in HTTP timeout dietro il proxy. Gira quindi come
+# JOB ASINCRONO: POST crea il record e lancia il lavoro in background, il client fa
+# polling sul GET. Stato in Mongo = robusto al multi-worker uvicorn. Un job "running"
+# più vecchio di questa soglia è considerato orfano (worker morto a metà) → failed.
+STALE_OPTIMIZE_SECONDS = 1800
 # ingestion_job_chunks = db["ingestion_job_chunks"]
 
 # Crea il router (come una mini-app)
@@ -323,47 +330,24 @@ def get_curation_stats(vector_store_id: str):
     }
 
 
-@router.post("/{vector_store_id}/optimize")
-def optimize_vector_store(
-    vector_store_id: str,
-    min_score: float = Query(default=0.6, ge=0.0, le=1.0),
-    min_entity_len: int = Query(default=3, ge=1),
-    drop_numeric: bool = Query(default=True),
-    dense_threshold: float = Query(default=0.96, ge=0.5, le=1.0),
-    include_redundancy: bool = Query(default=True),
-    apply_redundancy: bool = Query(default=False),
-    reset_redundancy: bool = Query(default=False),
-    include_outliers: bool = Query(default=False),
-    outlier_sim_threshold: float = Query(default=0.35, ge=0.0, le=1.0),
-    include_conflicts: bool = Query(default=False),
-    dry_run: bool = Query(default=False),
-):
-    """Ottimizza il vector store SENZA re-ingest, on-demand e idempotente.
+def _run_optimize(vector_store_id: str, p: dict) -> dict:
+    """Calcolo dell'ottimizzazione (sincrono, può durare minuti). Eseguito in
+    background da un job — NON valida il vector store (già fatto alla POST). `p` =
+    parametri (vedi optimize_vector_store). Semantica invariata, solo off-request.
 
-    Ripulisce il knowledge graph lavorando su ciò che è già stato estratto:
-    rimuove le menzioni con score < `min_score`, le entità "spazzatura" (nome corto
-    o solo numerazioni) e quelle rimaste orfane. Filtri agnostici (nessun dominio
-    hardcoded). Riporta anche le metriche di data curation (già coerenti per
-    costruzione: si aggiornano a ogni ingest). Con `dry_run=true` non cancella
-    nulla, conta soltanto cosa taglierebbe.
-
-    Diagnostiche SOLA LETTURA opt-in (non marcano né cancellano nulla):
-    `include_outliers` → chunk semanticamente lontani dal centroide (candidati
-    off-topic, vedi find_semantic_outliers); `include_conflicts` → coppie
-    (entità, relazione) con valori multipli sul grafo (candidati conflitto da
-    rivedere, find_relation_conflicts). Sono segnali per l'operatore, mai azioni
-    automatiche (l'outlier raro-ma-prezioso non si butta in automatico)."""
-    if not vector_store_id.startswith("vs_"):
-        raise HTTPException(status_code=404, detail="Vector store not found")
-    collections = [c.name for c in qdrant_client.get_collections().collections]
-    if vector_store_id not in collections:
-        raise HTTPException(status_code=404, detail="Vector store not found")
+    Ripulisce il knowledge graph su ciò che è già estratto: menzioni con score <
+    `min_score`, entità "spazzatura" (nome corto/numerico) e orfane. Filtri agnostici.
+    Riporta anche le metriche di data curation. `dry_run` non cancella nulla."""
+    dry_run = p["dry_run"]
+    reset_redundancy = p["reset_redundancy"]
+    apply_redundancy = p["apply_redundancy"]
+    dense_threshold = p["dense_threshold"]
     # Il graph-cleanup è distruttivo (irreversibile senza re-ingest): deve girare
-    # SOLO su un Applica vero. Reset marcatura è un'operazione di puro undo sui
-    # ridondanti → forziamo il dry_run sul grafo così non cancella nulla.
+    # SOLO su un Applica vero. Reset marcatura è un puro undo sui ridondanti →
+    # forziamo il dry_run sul grafo così non cancella nulla.
     graph = optimize_graph(
-        vector_store_id, min_score=min_score, min_entity_len=min_entity_len,
-        drop_numeric=drop_numeric, dry_run=dry_run or reset_redundancy,
+        vector_store_id, min_score=p["min_score"], min_entity_len=p["min_entity_len"],
+        drop_numeric=p["drop_numeric"], dry_run=dry_run or reset_redundancy,
     )
     curation = curation_stats(
         vector_store_id, CURATION_BOILERPLATE_RATIO, CURATION_BOILERPLATE_MIN_DOCS
@@ -373,7 +357,7 @@ def optimize_vector_store(
     #  - apply_redundancy → marca i ridondanti (soppressi a search-time, reversibile)
     #  - reset_redundancy → rimuove la marcatura
     redundancy = None
-    if include_redundancy:
+    if p["include_redundancy"]:
         if not dry_run and reset_redundancy:
             unmark_redundant(vector_store_id)
             redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
@@ -384,10 +368,10 @@ def optimize_vector_store(
             redundancy = find_redundant_clusters(vector_store_id, dense_threshold=dense_threshold)
     # Diagnostiche additive (sola lettura): off di default per non appesantire l'optimize.
     outliers = (
-        find_semantic_outliers(vector_store_id, sim_threshold=outlier_sim_threshold)
-        if include_outliers else None
+        find_semantic_outliers(vector_store_id, sim_threshold=p["outlier_sim_threshold"])
+        if p["include_outliers"] else None
     )
-    conflicts = find_relation_conflicts(vector_store_id) if include_conflicts else None
+    conflicts = find_relation_conflicts(vector_store_id) if p["include_conflicts"] else None
     if not dry_run:
         # graph cleanup / dedup non muovono points_count → invalida l'overview cachato
         overview_cache.delete_one({"_id": vector_store_id})
@@ -400,6 +384,112 @@ def optimize_vector_store(
         "redundancy": redundancy,
         "outliers": outliers,
         "conflicts": conflicts,
+    }
+
+
+def _execute_optimize_job(job_id: str, vector_store_id: str, p: dict) -> None:
+    """Esegue _run_optimize e persiste esito/risultato su Mongo. Gira nel threadpool
+    (BackgroundTasks) DOPO la risposta HTTP. Best-effort: un'eccezione → failed, mai
+    lascia il job orfano in running (lo copre comunque il reaper del GET)."""
+    try:
+        result = _run_optimize(vector_store_id, p)
+        optimize_jobs.update_one(
+            {"_id": job_id},
+            {"$set": {"status": "completed", "result": result,
+                      "finished_at": get_timestamp(), "updated_at": get_timestamp()}},
+        )
+        logger.info(f"optimize job {job_id} completed ({vector_store_id})")
+    except Exception as e:
+        logger.exception(f"optimize job {job_id} failed: {e}")
+        optimize_jobs.update_one(
+            {"_id": job_id},
+            {"$set": {"status": "failed", "error": str(e),
+                      "finished_at": get_timestamp(), "updated_at": get_timestamp()}},
+        )
+
+
+@router.post("/{vector_store_id}/optimize")
+def optimize_vector_store(
+    vector_store_id: str,
+    background_tasks: BackgroundTasks,
+    min_score: float = Query(default=0.6, ge=0.0, le=1.0),
+    min_entity_len: int = Query(default=3, ge=1),
+    drop_numeric: bool = Query(default=True),
+    dense_threshold: float = Query(default=0.96, ge=0.5, le=1.0),
+    include_redundancy: bool = Query(default=True),
+    apply_redundancy: bool = Query(default=False),
+    reset_redundancy: bool = Query(default=False),
+    include_outliers: bool = Query(default=False),
+    outlier_sim_threshold: float = Query(default=0.35, ge=0.0, le=1.0),
+    include_conflicts: bool = Query(default=False),
+    dry_run: bool = Query(default=False),
+):
+    """Avvia l'ottimizzazione come JOB ASINCRONO e ritorna subito (no HTTP timeout).
+
+    Il calcolo (near-duplicate dense∩sparse O(N) round-trip Qdrant, graph cleanup,
+    diagnostiche) può durare minuti su collection grandi → sincrono andrebbe in timeout
+    dietro il proxy. Qui la POST valida, crea un record `optimize_jobs` (status=running),
+    lancia il lavoro in background e ritorna `{job_id, status:"running"}`. Il client fa
+    polling su GET `/optimize/{job_id}` finché `completed`/`failed`.
+
+    Parametri (semantica invariata, vedi _run_optimize): `dry_run` solo conteggio;
+    `apply_redundancy` marca i near-duplicate (reversibile con `reset_redundancy`);
+    `include_outliers`/`include_conflicts` = diagnostiche SOLA LETTURA opt-in."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if vector_store_id not in collections:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    params = {
+        "min_score": min_score, "min_entity_len": min_entity_len,
+        "drop_numeric": drop_numeric, "dense_threshold": dense_threshold,
+        "include_redundancy": include_redundancy, "apply_redundancy": apply_redundancy,
+        "reset_redundancy": reset_redundancy, "include_outliers": include_outliers,
+        "outlier_sim_threshold": outlier_sim_threshold,
+        "include_conflicts": include_conflicts, "dry_run": dry_run,
+    }
+    job_id = generate_id("opt_")
+    now = get_timestamp()
+    optimize_jobs.insert_one({
+        "_id": job_id, "vector_store_id": vector_store_id, "status": "running",
+        "params": params, "result": None, "error": None,
+        "created_at": now, "updated_at": now, "finished_at": None,
+    })
+    background_tasks.add_task(_execute_optimize_job, job_id, vector_store_id, params)
+    return {
+        "object": "vector_store.optimize_job",
+        "job_id": job_id,
+        "vector_store_id": vector_store_id,
+        "status": "running",
+    }
+
+
+@router.get("/{vector_store_id}/optimize/{job_id}")
+def get_optimize_job(vector_store_id: str, job_id: str):
+    """Stato di un job di ottimizzazione (polling). `running` → riprova; `completed`
+    → `result` ha l'esito; `failed` → `error`. Un job running più vecchio di
+    STALE_OPTIMIZE_SECONDS è considerato orfano (worker morto a metà) → failed."""
+    job = optimize_jobs.find_one({"_id": job_id, "vector_store_id": vector_store_id})
+    if not job:
+        raise HTTPException(status_code=404, detail="Optimize job not found")
+    if job.get("status") == "running" and \
+            get_timestamp() - job.get("updated_at", 0) > STALE_OPTIMIZE_SECONDS:
+        optimize_jobs.update_one(
+            {"_id": job_id},
+            {"$set": {"status": "failed", "error": "job orfano (timeout)",
+                      "finished_at": get_timestamp(), "updated_at": get_timestamp()}},
+        )
+        job = optimize_jobs.find_one({"_id": job_id, "vector_store_id": vector_store_id})
+    return {
+        "object": "vector_store.optimize_job",
+        "job_id": job_id,
+        "vector_store_id": vector_store_id,
+        "status": job.get("status"),
+        "result": job.get("result"),
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+        "finished_at": job.get("finished_at"),
     }
 
 
