@@ -173,7 +173,7 @@ class VectorStoreFile(BaseModel):
     usage_bytes: int
     created_at: int
     vector_store_id: str
-    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"]
+    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED", "EXCLUDED"]
     last_error: Optional[Dict[str, Any]] = None
     # True se l'attach è stato saltato perché il contenuto era già presente.
     deduplicated: Optional[bool] = None
@@ -182,7 +182,7 @@ class VectorStoreFile(BaseModel):
 
 class IngestionJobResponse(BaseModel):
     job_id: str
-    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"]
+    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED", "EXCLUDED"]
     vector_store_id: str
     file_id: str
 

@@ -4,6 +4,39 @@ All notable changes to Sophia Vector are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/); the project follows
 semantic versioning (currently in the `alpha` pre-release line).
 
+## [0.6.1-alpha] — 2026-05-30
+
+### Added
+- **`.odg` support** (OpenDocument Drawing): converted to PDF via LibreOffice before Docling,
+  so vector drawings are no longer rejected as an unsupported extension.
+- **Tabular chunker for `.csv` / `.xlsx`.** Large tables used to explode inside Docling and yield
+  zero chunks (the job failed with "no extractable content"). A dedicated chunker now emits a
+  *table card* (schema, per-column statistics, sample rows) plus verbalized rows up to a cap, with
+  an explicit coverage note instead of silent truncation. Robust to the Italian CSV dialect
+  (`;` separator, comma decimals). Tunable via `SOPHIA_VECTOR_TABULAR_*`.
+- **Manual file exclusion.** Mark a file as `EXCLUDED` and the vector worker, the SharePoint sync
+  and every source skip it (also under the cron scheduler); already-indexed data (Qdrant + graph +
+  curation) is purged. Reversible. New endpoints `POST` / `DELETE /v1/vector_stores/{id}/files/{file_id}/exclude`
+  and `GET /v1/vector_stores/{id}/excluded`, a single source of truth, and an exclude / re-include
+  action in the UI.
+- **"Unassigned" view.** Files ingested via the API without a directory belong to no folder and were
+  invisible in the admin; a fixed card now lists and manages them.
+
+### Fixed
+- **`SUPPORTED_FORMATS.md` is now authoritative**: the full whitelist (48 extensions) is generated
+  from code, and the fixtures cover `.docx` / `.doc` / `.rtf` / `.odg` (the generator used to emit
+  empty Word files silently).
+- **GPU image** (`Dockerfile.cu130`): `COPY models/` was missing (the image crashed with
+  `ModuleNotFoundError`); the cu130 image now defaults the in-process NLP / ASR models to CUDA.
+- **`compile-and-publish.sh`** builds both the CPU and the cu130 flavours by default, with
+  position-independent argument parsing.
+
+## [0.6.0-alpha] — 2026-05-28
+
+### Added
+- **MCP server** (`/mcp`) exposing search and the NLP utilities as Model Context Protocol tools,
+  plus a per-vector-store scoped surface (`/v1/vector_stores/{id}/mcp`) with richer agent tools.
+
 ## [0.5.0-alpha] — 2026-05-28
 
 ### Added

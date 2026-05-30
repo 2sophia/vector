@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
+  Ban,
   Check,
   CheckCircle2,
   CloudUpload,
@@ -20,6 +21,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -83,14 +85,17 @@ const STATUS_PILL: Record<string, string> = {
   PROCESSING: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
   COMPLETED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
   FAILED: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
+  EXCLUDED: "bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
-// Ordinamento: in cima ciò che è "vivo" o da gestire, in fondo ciò che è a posto.
+// Ordinamento: in cima ciò che è "vivo" o da gestire, in fondo ciò che è a posto
+// o messo da parte di proposito (escluso).
 const STATUS_RANK: Record<string, number> = {
   PROCESSING: 0,
   FAILED: 1,
   PENDING: 2,
   COMPLETED: 3,
+  EXCLUDED: 4,
 };
 type SortMode = "status" | "name" | "recent";
 const SORT_LABEL: Record<SortMode, string> = { status: "Stato", name: "Nome", recent: "Recenti" };
@@ -102,6 +107,7 @@ const STATUS_FILTERS: { key: string; label: string }[] = [
   { key: "PROCESSING", label: "In corso" },
   { key: "PENDING", label: "In coda" },
   { key: "FAILED", label: "Falliti" },
+  { key: "EXCLUDED", label: "Esclusi" },
 ];
 
 function sortFiles(rows: StoreFile[], mode: SortMode): StoreFile[] {
@@ -151,7 +157,8 @@ function StatusBar({ rows }: { rows: StoreFile[] }) {
   const completed = count("COMPLETED");
   const processing = count("PROCESSING");
   const failed = count("FAILED");
-  const pending = total - completed - processing - failed; // PENDING + eventuali unknown
+  const excluded = count("EXCLUDED");
+  const pending = total - completed - processing - failed - excluded; // PENDING + eventuali unknown
   const active = processing > 0 || pending > 0;
   const pct = (n: number) => `${(n / total) * 100}%`;
 
@@ -168,6 +175,7 @@ function StatusBar({ rows }: { rows: StoreFile[] }) {
           )}
           {pending > 0 && <span>{pending} in coda</span>}
           {failed > 0 && <span className="text-red-600 dark:text-red-400">{failed} falliti</span>}
+          {excluded > 0 && <span className="text-zinc-400 dark:text-zinc-500">{excluded} esclusi</span>}
         </span>
       </div>
       <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
@@ -175,6 +183,7 @@ function StatusBar({ rows }: { rows: StoreFile[] }) {
         {processing > 0 && <div className="bg-amber-400" style={{ width: pct(processing) }} />}
         {pending > 0 && <div className="bg-zinc-300 dark:bg-zinc-600" style={{ width: pct(pending) }} />}
         {failed > 0 && <div className="bg-red-500" style={{ width: pct(failed) }} />}
+        {excluded > 0 && <div className="bg-zinc-400 dark:bg-zinc-500" style={{ width: pct(excluded) }} />}
       </div>
     </div>
   );
@@ -188,10 +197,14 @@ function FilesTable({
   rows,
   onDelete,
   onRetry,
+  onExclude,
+  onUnexclude,
 }: {
   rows: StoreFile[];
   onDelete: (f: StoreFile) => void;
   onRetry: (f: StoreFile) => void;
+  onExclude: (f: StoreFile) => void;
+  onUnexclude: (f: StoreFile) => void;
 }) {
   const [visible, setVisible] = useState(FILES_PAGE_SIZE);
   const shown = rows.slice(0, visible);
@@ -245,6 +258,7 @@ function FilesTable({
                   {f.status === "COMPLETED" && <CheckCircle2 className="size-3" />}
                   {f.status === "PROCESSING" && <Loader2 className="size-3 animate-spin" />}
                   {f.status === "FAILED" && <FileWarning className="size-3" />}
+                  {f.status === "EXCLUDED" && <Ban className="size-3" />}
                   {f.status}
                 </span>
                 {f.status === "FAILED" && f.error && (
@@ -263,6 +277,27 @@ function FilesTable({
                     title="Ri-accoda il file (torna in coda per un nuovo tentativo)"
                   >
                     <RotateCcw className="size-4 text-zinc-500 hover:text-indigo-600" />
+                  </Button>
+                )}
+                {f.status === "EXCLUDED" ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onUnexclude(f)}
+                    aria-label="Re-includi"
+                    title="Togli l'esclusione (poi re-attacca o re-sincronizza per re-ingestire)"
+                  >
+                    <Undo2 className="size-4 text-zinc-500 hover:text-emerald-600" />
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onExclude(f)}
+                    aria-label="Escludi"
+                    title="Escludi: worker e sync lo salteranno (anche col cron) e i dati indicizzati vengono rimossi"
+                  >
+                    <Ban className="size-4 text-zinc-500 hover:text-amber-600" />
                   </Button>
                 )}
                 <Button
@@ -301,6 +336,12 @@ function FilesTable({
 export default function DirectoryDetailPage() {
   const params = useParams<{ id: string }>();
   const directoryId = params.id;
+  // Modalità speciale "senza directory": pseudo-directory per i file dello store NON
+  // assegnati a nessuno slug (caricati via API/dev). Lo store arriva dal query param ?vs=.
+  const searchParams = useSearchParams();
+  const isUnassigned = directoryId === "_unassigned";
+  const vsParam = searchParams.get("vs") || "";
+  const [dirSlugs, setDirSlugs] = useState<string[]>([]);
 
   const [dir, setDir] = useState<Directory | null>(null);
   const [storeName, setStoreName] = useState<string>("");
@@ -377,7 +418,7 @@ export default function DirectoryDetailPage() {
 
   // Job di import di QUESTA directory (stesso vector store + slug)
   const refreshSpJobs = useCallback(async () => {
-    if (!dir) return;
+    if (!dir || isUnassigned) return;
     try {
       const res = await api.get<{ data: SpJob[] }>("/ingest/sharepoint");
       const mine = (res.data || []).filter(
@@ -389,10 +430,33 @@ export default function DirectoryDetailPage() {
     } catch {
       /* ignore */
     }
-  }, [dir]);
+  }, [dir, isUnassigned]);
 
-  // Carica la directory
+  // Carica la directory (o costruisce la pseudo-directory "senza slug")
   useEffect(() => {
+    if (isUnassigned) {
+      // Nessun doc su Mongo: pseudo-directory sintetica. Servono gli slug reali dello
+      // store per filtrare i file che NON appartengono a nessuna directory.
+      setDir({
+        id: "_unassigned",
+        name: "Senza directory",
+        slug: "",
+        properties: {},
+        vector_store_id: vsParam,
+        file_count: 0,
+      } as Directory);
+      (async () => {
+        try {
+          const res = await api.get<{ data: Directory[] }>(
+            `/directories?vector_store_id=${vsParam}`,
+          );
+          setDirSlugs((res.data || []).map((d) => d.slug));
+        } catch {
+          setDirSlugs([]);
+        }
+      })();
+      return;
+    }
     (async () => {
       try {
         const d = await api.get<Directory>(`/directories/${directoryId}`);
@@ -402,7 +466,7 @@ export default function DirectoryDetailPage() {
         setLoading(false);
       }
     })();
-  }, [directoryId]);
+  }, [directoryId, isUnassigned, vsParam]);
 
   // Nome del vector store per il breadcrumb
   useEffect(() => {
@@ -417,20 +481,24 @@ export default function DirectoryDetailPage() {
     })();
   }, [dir]);
 
-  // File del vector store filtrati per slug della directory
+  // File dello store: in una directory normale quelli col suo slug; nella pseudo
+  // "senza directory" quelli che NON appartengono a nessuno slug esistente.
   const refresh = useCallback(async () => {
     if (!dir) return;
     setLoading(true);
     try {
       const res = await api.get<{ data: StoreFile[] }>(`/vector_stores/${dir.vector_store_id}/files`);
-      const mine = (res.data || []).filter((f) => (f.attributes?.[SLUG_FIELD] ?? "") === dir.slug);
+      const all = res.data || [];
+      const mine = isUnassigned
+        ? all.filter((f) => !dirSlugs.includes(String(f.attributes?.[SLUG_FIELD] ?? "")))
+        : all.filter((f) => (f.attributes?.[SLUG_FIELD] ?? "") === dir.slug);
       setFiles(mine);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [dir]);
+  }, [dir, isUnassigned, dirSlugs]);
 
   // Fetch iniziale una volta quando la directory è pronta.
   useEffect(() => {
@@ -504,6 +572,32 @@ export default function DirectoryDetailPage() {
     if (!dir) return;
     try {
       await api.post(`/vector_stores/${dir.vector_store_id}/files/${f.file_id}/retry`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleExclude(f: StoreFile) {
+    if (!dir) return;
+    if (
+      !confirm(
+        `Escludere "${f.filename}"?\n\nIl sistema lo salterà ovunque (vector worker + sync SharePoint, anche col cron) e rimuoverà i dati già indicizzati. Reversibile dal pulsante "Re-includi".`,
+      )
+    )
+      return;
+    try {
+      await api.post(`/vector_stores/${dir.vector_store_id}/files/${f.file_id}/exclude`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleUnexclude(f: StoreFile) {
+    if (!dir) return;
+    try {
+      await api.delete(`/vector_stores/${dir.vector_store_id}/files/${f.file_id}/exclude`);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -653,7 +747,7 @@ export default function DirectoryDetailPage() {
               ) : (
                 <>
                   {dir?.name ?? "…"}
-                  {dir && (
+                  {dir && !isUnassigned && (
                     <button
                       onClick={() => {
                         setNameDraft(dir.name);
@@ -670,11 +764,16 @@ export default function DirectoryDetailPage() {
               )}
             </h1>
             <div className="flex flex-wrap items-center gap-1.5">
-              {dir && (
-                <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[11px] text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
-                  {dir.slug}
-                </span>
-              )}
+              {dir &&
+                (isUnassigned ? (
+                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                    file senza slug
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[11px] text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                    {dir.slug}
+                  </span>
+                ))}
               {propEntries.map(([k, v]) => (
                 <span
                   key={k}
@@ -686,14 +785,16 @@ export default function DirectoryDetailPage() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant={showSchema ? "default" : "outline"}
-              size="sm"
-              onClick={() => setShowSchema((v) => !v)}
-            >
-              <Sparkles className="size-4" />
-              Estrazione
-            </Button>
+            {!isUnassigned && (
+              <Button
+                variant={showSchema ? "default" : "outline"}
+                size="sm"
+                onClick={() => setShowSchema((v) => !v)}
+              >
+                <Sparkles className="size-4" />
+                Estrazione
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={refresh} disabled={loading || !dir}>
               <RefreshCw className={cn("size-4", loading && "animate-spin")} />
               Refresh
@@ -713,11 +814,12 @@ export default function DirectoryDetailPage() {
         )}
 
         {/* Estrazione (schema entità/relazioni a livello directory) — apribile dalla toolbar */}
-        {showSchema && (
+        {showSchema && !isUnassigned && (
           <SchemaEditor basePath={`/directories/${directoryId}`} levelLabel="directory" canReset />
         )}
 
-        {/* Upload manuale */}
+        {/* Upload manuale — solo con uno slug (i file ereditano slug/proprietà della directory) */}
+        {!isUnassigned && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Carica documenti</CardTitle>
@@ -770,8 +872,10 @@ export default function DirectoryDetailPage() {
             </label>
           </CardContent>
         </Card>
+        )}
 
         {/* Import da sorgente */}
+        {!isUnassigned && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -998,6 +1102,7 @@ export default function DirectoryDetailPage() {
             )}
           </CardContent>
         </Card>
+        )}
 
         {/* File indicizzati — manuali e sincronizzati tenuti separati */}
         <Card>
@@ -1098,7 +1203,7 @@ export default function DirectoryDetailPage() {
                       <CloudUpload className="size-4" />
                       Caricati a mano · {manualFiles.length}
                     </div>
-                    <FilesTable rows={manualFiles} onDelete={handleDelete} onRetry={handleRetry} />
+                    <FilesTable rows={manualFiles} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
                   </div>
                 )}
 
@@ -1112,7 +1217,7 @@ export default function DirectoryDetailPage() {
                       Gestiti dalle sync qui sopra. Eliminandoli a mano tornano al prossimo sync se ancora
                       presenti nella source: per toglierli davvero, elimina la sync.
                     </p>
-                    <FilesTable rows={syncedFiles} onDelete={handleDelete} onRetry={handleRetry} />
+                    <FilesTable rows={syncedFiles} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
                   </div>
                 )}
               </>

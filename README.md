@@ -45,7 +45,7 @@ docker run -d --name sophia-vector \
   -e NEXTAUTH_SECRET=<32+ random chars> \               # signs login sessions
   -e NEXTAUTH_URL=https://vector.yourbank.internal \    # public URL of the frontend
   -v sophia_vector_data:/app/storage \
-  sophiacloud/vector:0.6.0-alpha --frontend
+  sophiacloud/vector:0.6.1-alpha --frontend
 ```
 
 **Recommended for a protected deployment:** also set `SOPHIA_VECTOR_API_KEY` + `BACKEND_API_KEY`
@@ -58,7 +58,7 @@ docker run -d --name sophia-vector \
   override the matching `SOPHIA_VECTOR_*_URL` / `MONGODB_URI` env **only if your hosts differ**
 - Needs **Qdrant**, **MongoDB**, **Docling** and a **BGE-M3** endpoint reachable — the whole stack is
   wired up in [`docker-compose.yml`](docker-compose.yml) (recommended: `docker compose up -d`)
-- GPU build available as `sophiacloud/vector:0.6.0-alpha-cu130` (see [GPU acceleration](#gpu-acceleration-optional))
+- GPU build available as `sophiacloud/vector:0.6.1-alpha-cu130` (see [GPU acceleration](#gpu-acceleration-optional))
 
 > Full env reference in [Configuration](#configuration). Use Compose for a one-command stack; the
 > `docker run` above is the minimal secrets-only shape.
@@ -142,7 +142,7 @@ across all of these:
 | Category              | Formats                                                           | Handling                         |
 |-----------------------|-------------------------------------------------------------------|----------------------------------|
 | Documents             | PDF, DOCX, PPTX, XLSX, HTML/XHTML, Markdown, CSV, AsciiDoc, LaTeX | native (Docling)                 |
-| Legacy / OpenDocument | DOC, PPT, XLS, RTF, ODT, ODP, ODS                                 | → OOXML via LibreOffice          |
+| Legacy / OpenDocument | DOC, PPT, XLS, RTF, ODT, ODP, ODS, ODG                            | → OOXML, ODG → PDF (LibreOffice)  |
 | Email                 | EML, MSG                                                          | → HTML                           |
 | Images                | PNG, JPG, TIFF, BMP, GIF, WEBP                                    | native, **OCR** for scanned text |
 | Audio                 | WAV, MP3, M4A, OGG, FLAC, AAC, …                                  | → VTT via local Whisper          |
@@ -222,7 +222,7 @@ The `sophia-vector` service in `docker-compose.yml` runs the published image. Bu
 ./compile-and-publish.sh [version]            # CPU image, multi-arch (amd64 + arm64) + push
 ./compile-and-publish.sh [version] cu130      # GPU image (torch cu130), amd64 → :<version>-cu130
 # or directly:
-docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.6.0-alpha --push .
+docker buildx build --platform linux/amd64 -t sophiacloud/vector:0.6.1-alpha --push .
 ```
 
 On the prod host, copy `.env.prod` → `.env` (only secrets + `NEXTAUTH_URL`; service URLs are
@@ -239,7 +239,7 @@ which is fine for moderate volumes. To run them on a GPU, build the **GPU flavor
 (`Dockerfile.cu130`, torch cu130 / CUDA 13.0, ~2 GB larger):
 
 ```bash
-./compile-and-publish.sh 0.6.0-alpha cu130    # → sophiacloud/vector:0.6.0-alpha-cu130
+./compile-and-publish.sh 0.6.1-alpha cu130    # → sophiacloud/vector:0.6.1-alpha-cu130
 ```
 
 Then point the compose service at the `-cu130` image, give it the GPU (host needs the NVIDIA driver
@@ -248,7 +248,7 @@ Then point the compose service at the `-cu130` image, give it the GPU (host need
 
 ```yaml
 # docker-compose.yml (sophia-vector service)
-image: sophiacloud/vector:0.6.0-alpha-cu130
+image: sophiacloud/vector:0.6.1-alpha-cu130
 deploy:
   resources:
     reservations:
@@ -408,7 +408,7 @@ Interactive API reference (Scalar, shown above) — full `/v1/*` surface, try-it
 
 ## Version
 
-Current version: **0.6.0-alpha**
+Current version: **0.6.1-alpha**
 
 ## License
 

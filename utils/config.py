@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # --- App ---
     APP_NAME: str = "Sophia Vector"
-    APP_VERSION: str = "0.6.0-alpha"
+    APP_VERSION: str = "0.6.1-alpha"
     DEBUG: bool = False
 
     # --- Auth / sicurezza ---
@@ -179,6 +179,23 @@ class Settings(BaseSettings):
     # Timeout per-documento inviato a Docling. Default alto (prod); le istanze
     # Docling con un massimo più basso (es. dev = 1800s) vanno sotto quel tetto.
     PARSER_MAX_WAIT_SECONDS: int = 36000
+
+    # --- Tabular ingestion (CSV/XLSX): chunker dedicato, bypassa Docling ---
+    # Docling tratta un CSV/XLSX come UNA tabella: su file con decine di migliaia di
+    # righe la serializzazione esplode e non emette nulla (0 chunk → il job falliva
+    # "nessun contenuto estraibile"). Una tabella però non è prosa: invece di
+    # embeddare N righe quasi-identiche, produciamo (1) una "table card" — schema,
+    # dimensioni, statistiche per colonna, righe campione: compressione semantica,
+    # SEMPRE presente — e (2) le righe verbalizzate in batch fino a un cap, così i
+    # singoli record restano trovabili senza gonfiare l'indice. Oltre il cap è
+    # dichiarato (niente troncamento muto). TABULAR_ENABLED=False → torna a Docling.
+    # Vedi utils/tabular.py.
+    TABULAR_ENABLED: bool = True
+    TABULAR_ROWS_PER_CHUNK: int = 15       # righe verbalizzate per chunk
+    TABULAR_MAX_ROW_CHUNKS: int = 50       # cap dei chunk-righe (0 = solo card; <0 = tutte)
+    TABULAR_SAMPLE_ROWS: int = 5           # righe campione dentro la card
+    TABULAR_TOP_CATEGORIES: int = 8        # valori più frequenti per colonna categorica
+    TABULAR_MAX_READ_MB: int = 200         # oltre: legge solo un campione (no OOM), card marcata
 
     # --- ASR (trascrizione audio/video; faster-whisper su CPU) ---
     # Stesso pattern di GLiNER: il modello si carica LAZY al primo file audio/video

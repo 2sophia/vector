@@ -3,7 +3,7 @@ Pre-parser normalization layer.
 
 Docling mangia nativamente solo un set di formati (PDF, OOXML 2007+, HTML, MD,
 CSV, AsciiDoc, immagini). Per i formati che NON gestisce — mail (.eml/.msg),
-Office binario 97-2003 (.doc/.ppt/.xls), .rtf, ODF (.odt/.ods/.odp), .txt — li
+Office binario 97-2003 (.doc/.ppt/.xls), .rtf, ODF (.odt/.ods/.odp/.odg), .txt — li
 convertiamo QUI in un formato che Docling capisce, *prima* di mandarli al parser.
 
 Imbuto unico: chiamato da `workers.vector.handle_job` subito prima di
@@ -39,6 +39,9 @@ _OFFICE_TARGET = {
     ".doc": "docx", ".rtf": "docx", ".odt": "docx",
     ".ppt": "pptx", ".odp": "pptx",
     ".xls": "xlsx", ".ods": "xlsx",
+    # ODF Draw: niente OOXML equivalente → PDF, che Docling parsa nativo (l'OCR
+    # pesca le label del disegno). Spesso poco testo, ma niente più EXCLUDED.
+    ".odg": "pdf",
 }
 
 
@@ -121,7 +124,7 @@ def _msg_to_html(src: str, out_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Office binario / RTF / ODF → docx|pptx|xlsx via LibreOffice headless
+# Office binario / RTF / ODF → docx|pptx|xlsx|pdf via LibreOffice headless
 # ---------------------------------------------------------------------------
 
 def _soffice_convert(src: str, target_ext: str, out_dir: str) -> str:

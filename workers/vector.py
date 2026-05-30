@@ -25,12 +25,14 @@ from utils.database import db
 from utils.qdrant import qdrant_client, delete_qdrant_points
 from utils.docling import upload_file_for_chunking_sync, clear_caches
 from utils.convert import normalize_for_parser, UnsupportedFormatError
+from utils.tabular import is_tabular, chunk_tabular
+from utils.exclusions import is_excluded
 from utils.embeddings import get_bge_embeddings
 from utils.filesystem import delete_file_from_disk
 from utils.falkor import write_document_graph, purge_file_graph, write_relations
 from models.ner import NerModel
 from utils import model_client
-from utils.settings import GLINER_ENABLED, CLASSIFIER_ENABLED
+from utils.settings import GLINER_ENABLED, CLASSIFIER_ENABLED, TABULAR_ENABLED
 
 # Estrazione entità: i modelli PESANTI (GLiNER/relex/classifier) e Whisper vivono nel
 # BACKEND e si chiamano via model_client (HTTP) → una sola copia, nessun peso qui.
@@ -235,6 +237,18 @@ async def _process_job(job: Dict[str, Any]):
 
     logger.info(f"[{tag}] Start ingestion file_id={file_id} path={file_path}")
 
+    # Guard esclusione: il file è stato marcato EXCLUDED dopo la creazione del job
+    # → non lo processiamo. Difensivo (di norma un file escluso ha già i job a
+    # EXCLUDED e non viene ri-pescato): copre la corsa creazione-job → esclusione.
+    # Identità: file_id manuale + sharepoint_file_id (id Graph, stabile tra le sync).
+    sp_file_id = (job.get("attributes") or {}).get("sharepoint_file_id")
+    if await asyncio.to_thread(
+        is_excluded, vector_store_id, file_id=file_id, sharepoint_file_id=sp_file_id
+    ):
+        logger.info(f"[{tag}] file marcato EXCLUDED → skip")
+        await set_job_status(job_id, "EXCLUDED", {"error": None})
+        return
+
     # Guard file rotto: mancante o 0 byte → FAILED subito, niente parse inutile.
     # Casi reali visti in prod: download SharePoint fallito che lascia un file vuoto,
     # o PDF corrotto a 0 byte → Docling darebbe PdfiumError e 0 chunk "COMPLETED"
@@ -280,14 +294,19 @@ async def _process_job(job: Dict[str, Any]):
         await set_job_status(job_id, "FAILED", {"error": f"Conversion error: {e}"})
         return
 
-    # 1) Chunking via Docling (sul file normalizzato; tempdir ripulita a fine parse).
-    # chunk_max_tokens viene dallo schema effettivo (override per file/dir/store).
+    # 1) Chunking. Le tabelle (csv/xlsx) NON passano da Docling: una tabella grande
+    # esplode (0 chunk). Chunker tabulare dedicato → table card + righe verbalizzate
+    # (vedi utils/tabular.py). Tutto il resto va a Docling. chunk_max_tokens viene
+    # dallo schema effettivo (override per file/dir/store). Tempdir ripulita a fine parse.
     try:
-        result = await asyncio.to_thread(
-            upload_file_for_chunking_sync, parse_path, schema["chunk_max_tokens"]
-        )
+        if TABULAR_ENABLED and is_tabular(parse_path):
+            result = await asyncio.to_thread(chunk_tabular, parse_path)
+        else:
+            result = await asyncio.to_thread(
+                upload_file_for_chunking_sync, parse_path, schema["chunk_max_tokens"]
+            )
     except Exception as e:
-        logger.exception(f"[{tag}] Docling chunking failed: {e}")
+        logger.exception(f"[{tag}] Chunking failed: {e}")
         await set_job_status(job_id, "FAILED", {"error": f"Chunking error: {e}"})
         return
     finally:

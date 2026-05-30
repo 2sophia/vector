@@ -31,3 +31,8 @@ extract-msg
 faster-whisper
 # MCP server (/mcp, MCP_ENABLED): espone search + NLP come tool Model Context Protocol.
 mcp
+# chunker tabulare (utils/tabular.py): CSV/XLSX grandi → "table card" + righe
+# verbalizzate invece di mandarli a Docling (che esplode sulle tabelle enormi).
+# pandas per parsing robusto (sniff separatore, decimale IT, dtype); openpyxl per .xlsx.
+pandas
+openpyxl

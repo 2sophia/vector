@@ -9,6 +9,7 @@ import {
   Check,
   Database,
   FolderTree,
+  Inbox,
   Loader2,
   BarChart3,
   Pencil,
@@ -46,6 +47,7 @@ export default function VectorStoreDetailPage() {
 
   const [storeName, setStoreName] = useState<string>("");
   const [dirs, setDirs] = useState<Directory[]>([]);
+  const [unassignedCount, setUnassignedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -89,10 +91,11 @@ export default function VectorStoreDetailPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get<{ data: Directory[] }>(
+      const res = await api.get<{ data: Directory[]; unassigned?: { file_count: number } }>(
         `/directories?vector_store_id=${vectorStoreId}`,
       );
       setDirs(res.data || []);
+      setUnassignedCount(res.unassigned?.file_count ?? 0);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -256,19 +259,30 @@ export default function VectorStoreDetailPage() {
           <SchemaEditor basePath={`/vector_stores/${vectorStoreId}`} levelLabel="store" />
         )}
 
-        {dirs.length === 0 ? (
-          <Card>
-            <CardContent className="py-12">
-              <div className="flex flex-col items-center justify-center gap-3 text-center">
-                <FolderTree className="size-8 text-zinc-300 dark:text-zinc-700" />
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {loading ? "Caricamento…" : "Nessuna directory — creane una per iniziare."}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Card fissa: file dello store senza directory (caricati via API/dev senza
+                slug) — altrimenti invisibili. Sempre presente. */}
+            <Card className="flex flex-col border-dashed">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Inbox className="size-4 text-zinc-400" />
+                  Senza directory
+                </CardTitle>
+                <CardDescription>File senza slug · {unassignedCount} file</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col justify-between gap-3">
+                <p className="text-[11px] text-zinc-400">
+                  Caricati via API/dev senza directory. Visibili e gestibili qui.
                 </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Link href={`/directories/_unassigned?vs=${vectorStoreId}`}>
+                  <Button variant="outline" size="sm" className="w-full justify-between">
+                    Apri
+                    <ArrowRight className="size-4" />
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+
             {dirs.map((d) => {
               const propEntries = Object.entries(d.properties || {});
               return (
@@ -319,6 +333,10 @@ export default function VectorStoreDetailPage() {
               );
             })}
           </div>
+        {dirs.length === 0 && !loading && (
+          <p className="pt-1 text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Nessuna directory — creane una per organizzare i file.
+          </p>
         )}
       </div>
 

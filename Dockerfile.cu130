@@ -56,6 +56,14 @@ ENV SOPHIA_VECTOR_QDRANT_URL=http://qdrant:6333 \
     MONGODB_URI=mongodb://mongodb:27017 \
     SOPHIA_VECTOR_PARSER_MAX_WAIT_SECONDS=1700
 
+# Questa è l'immagine GPU (cu130): i modelli NLP in-process (GLiNER + relex + classifier e
+# Whisper/ASR) partono su CUDA di default — è il senso stesso del tag -cu130. Il codice ha
+# default "cpu" (giusto per l'immagine cpu e il dev); qui lo sovrascriviamo. Best-effort: se la
+# GPU non è raggiungibile a runtime, resolve_device ricade su CPU con un warning. Override dal
+# compose se serve (es. SOPHIA_VECTOR_GLINER_DEVICE=cpu).
+ENV SOPHIA_VECTOR_GLINER_DEVICE=cuda \
+    SOPHIA_VECTOR_ASR_DEVICE=cuda
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gosu \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
@@ -88,6 +96,7 @@ COPY main.py .
 COPY routers/ ./routers/
 COPY utils/ ./utils/
 COPY workers/ ./workers/
+COPY models/ ./models/
 
 # Frontend standalone build
 COPY --from=frontend-builder /build/.next/standalone/ ./frontend/

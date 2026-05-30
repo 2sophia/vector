@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import aiofiles
 import aiofiles.os
 
-from fastapi import HTTPException, Query, APIRouter, Body
+from fastapi import HTTPException, Query, APIRouter, Body, Header
 
 from utils.database import db
 from utils.docling import PARSER_SUPPORTED_EXTENSIONS
@@ -20,6 +20,7 @@ from utils.qdrant import (
 )
 from utils.falkor import delete_graph, purge_file_graph, export_graph, optimize_graph, graph_stats
 from utils.curation import purge_file_bodies, delete_collection_bodies, curation_stats
+from utils.exclusions import exclude_file, unexclude_file, list_excluded, is_excluded
 from utils.store_schema import (
     get_effective_schema, get_schema_doc, set_schema, delete_store_schemas,
 )
@@ -82,6 +83,7 @@ def _file_counts(vector_store_id: str) -> Dict[str, int]:
         "completed": n({"status": "COMPLETED"}),
         "in_progress": n({"status": {"$in": ["PENDING", "PROCESSING"]}}),
         "failed": n({"status": "FAILED"}),
+        "excluded": n({"status": "EXCLUDED"}),
         "cancelled": 0,
     }
 
@@ -757,6 +759,49 @@ async def retry_failed_files(vector_store_id: str, body: Optional[Dict[str, Any]
             "slug": slug, "requeued": res.modified_count}
 
 
+@router.post("/{vector_store_id}/files/{file_id}/exclude")
+async def exclude_vector_store_file(
+    vector_store_id: str,
+    file_id: str,
+    body: Optional[Dict[str, Any]] = Body(default=None),
+    x_user_id: Optional[str] = Header(default=None, alias="x-user-id"),
+):
+    """Marca un file come EXCLUDED: vector worker, sync SharePoint e ogni source lo
+    saltano, e i dati già indicizzati (Qdrant + grafo + curation) vengono rimossi.
+    La sync continua a vederlo ma lo conta escluso, anche col cron. Body opzionale
+    `{"reason": "..."}`. Idempotente."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    if not file_id.startswith("file-"):
+        raise HTTPException(status_code=404, detail="File not found")
+    reason = (body or {}).get("reason")
+    res = await asyncio.to_thread(
+        exclude_file, vector_store_id, file_id, reason=reason, excluded_by=x_user_id
+    )
+    return {"object": "vector_store.file.excluded", **res}
+
+
+@router.delete("/{vector_store_id}/files/{file_id}/exclude")
+async def unexclude_vector_store_file(vector_store_id: str, file_id: str):
+    """Toglie l'esclusione di un file. I suoi job restano EXCLUDED: per re-ingestire
+    si re-attacca (manuale) o si re-sincronizza (SharePoint, che ora non lo salta più)."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    removed = await asyncio.to_thread(unexclude_file, vector_store_id, file_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="File non risulta escluso")
+    return {"object": "vector_store.file.unexcluded", "file_id": file_id, "unexcluded": True}
+
+
+@router.get("/{vector_store_id}/excluded")
+async def list_vector_store_excluded(vector_store_id: str):
+    """Lista dei file esclusi dal vector store (più recenti prima)."""
+    if not vector_store_id.startswith("vs_"):
+        raise HTTPException(status_code=404, detail="Vector store not found")
+    data = await asyncio.to_thread(list_excluded, vector_store_id)
+    return {"object": "list", "data": data}
+
+
 # TODO: WORK / REVIEW FILE CONTENTS?
 @router.post("/{vector_store_id}/files", response_model=VectorStoreFile)
 async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttach):
@@ -778,6 +823,14 @@ async def attach_file_to_vector_store(vector_store_id: str, file_data: FileAttac
 
     if not file_path or not file_metadata:
         raise HTTPException(status_code=404, detail="File not found")
+
+    # File già marcato EXCLUDED in questo store → non ri-accodare (escluso apposta;
+    # per re-ingestire si toglie prima l'esclusione).
+    if await asyncio.to_thread(is_excluded, vector_store_id, file_id=file_data.file_id):
+        raise HTTPException(
+            status_code=409,
+            detail="File escluso da questo vector store — togli l'esclusione per re-ingestire",
+        )
 
     file_ext = os.path.splitext(file_metadata.get("filename", ""))[1].lower()
     if file_ext not in PARSER_SUPPORTED_EXTENSIONS:

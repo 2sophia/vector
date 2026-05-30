@@ -113,6 +113,31 @@ FODP = f"""<?xml version="1.0" encoding="UTF-8"?>
  </office:presentation></office:body>
 </office:document>"""
 
+# Flat ODF Drawing (XML testuale) → soffice ne deriva l'odg (LibreOffice Draw).
+# Il disegno porta un riquadro di testo: convertito a PDF (vedi utils/convert) ha
+# un text layer vero → la pipeline produce chunk (i veri .odg di brand spesso no,
+# è testo in curve, ma qui ci serve provare il path .odg→pdf).
+FODG = f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+  office:version="1.2"
+  office:mimetype="application/vnd.oasis.opendocument.graphics">
+ <office:body><office:drawing>
+  <draw:page draw:name="page1">
+   <draw:frame svg:width="20cm" svg:height="6cm" svg:x="2cm" svg:y="2cm">
+    <draw:text-box>
+     <text:p>{TITLE}</text:p>
+     <text:p>Obblighi di trasparenza verso il cliente.</text:p>
+     <text:p>IBAN IT60X0542811101000000123456.</text:p>
+    </draw:text-box>
+   </draw:frame>
+  </draw:page>
+ </office:drawing></office:body>
+</office:document>"""
+
 
 def _soffice(src: str, target: str) -> None:
     profile = os.path.join(FIX, ".loprofile")
@@ -122,6 +147,12 @@ def _soffice(src: str, target: str) -> None:
          "--convert-to", target, "--outdir", FIX, src],
         check=True, capture_output=True, text=True, timeout=180,
     )
+    # soffice esce 0 ANCHE quando non produce nulla (es. html→docx: l'HTML si apre
+    # in modalità Writer/Web e i filtri Word non esportano). Verifichiamo l'output,
+    # sennò 'made' mentirebbe e una fixture mancante passerebbe inosservata.
+    out = os.path.join(FIX, os.path.splitext(os.path.basename(src))[0] + "." + target)
+    if not os.path.exists(out):
+        raise RuntimeError(f"soffice non ha prodotto {os.path.basename(out)} da {os.path.basename(src)}")
 
 
 def _convert(src: str, dst: str) -> None:
@@ -149,6 +180,9 @@ def main():
     # formato dichiarato, viene scritto qui e rimosso a fine generazione.
     with open(os.path.join(FIX, "sample.fodp"), "w", encoding="utf-8") as f:
         f.write(FODP)
+    # .fodg: intermediario per generare il disegno .odg (poi rimosso).
+    with open(os.path.join(FIX, "sample.fodg"), "w", encoding="utf-8") as f:
+        f.write(FODG)
 
     # .eml via stdlib (multipart plain+html)
     from email.message import EmailMessage
@@ -164,11 +198,15 @@ def main():
     made.append("sample.eml")
 
     # 2) Derivati LibreOffice
+    # I Word (.docx/.doc/.rtf) si derivano dall'ODT (Writer vero), NON dall'HTML:
+    # html→docx in headless apre in modalità Writer/Web e non esporta → file vuoto.
+    # Quindi prima generiamo l'odt, poi da quello i formati Word.
     soffice_jobs = [
-        ("sample.html", "docx"), ("sample.html", "doc"), ("sample.html", "odt"),
-        ("sample.html", "rtf"), ("sample.html", "pdf"),
+        ("sample.html", "odt"), ("sample.html", "pdf"),
+        ("sample.odt", "docx"), ("sample.odt", "doc"), ("sample.odt", "rtf"),
         ("sample.csv", "xlsx"), ("sample.csv", "xls"), ("sample.csv", "ods"),
         ("sample.fodp", "pptx"), ("sample.fodp", "ppt"), ("sample.fodp", "odp"),
+        ("sample.fodg", "odg"),
     ]
     for src, target in soffice_jobs:
         try:
@@ -224,11 +262,12 @@ def main():
     except Exception as e:
         failed.append(f"sample.mp4: {str(e)[:120]}")
 
-    # pulizia: profilo LibreOffice + intermediario .fodp
+    # pulizia: profilo LibreOffice + intermediari flat-ODF (.fodp/.fodg)
     shutil.rmtree(os.path.join(FIX, ".loprofile"), ignore_errors=True)
-    fodp = os.path.join(FIX, "sample.fodp")
-    if os.path.exists(fodp):
-        os.remove(fodp)
+    for inter in ("sample.fodp", "sample.fodg"):
+        p = os.path.join(FIX, inter)
+        if os.path.exists(p):
+            os.remove(p)
 
     print(f"\n✅ generati {len(made)}: {', '.join(sorted(made))}")
     if failed:

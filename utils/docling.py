@@ -62,6 +62,7 @@ PARSER_CONVERTIBLE_EXTENSIONS = {
     ".doc", ".rtf", ".odt",    # word-like → docx
     ".ppt", ".odp",            # slide-like → pptx
     ".xls", ".ods",            # sheet-like → xlsx
+    ".odg",                    # disegni ODF (LibreOffice Draw) → pdf
     ".txt",                    # testo → md
 }
 if ASR_ENABLED:

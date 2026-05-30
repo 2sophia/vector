@@ -19,7 +19,7 @@ import logging
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.disable(logging.INFO)  # silenzia i log debug del client docling
 
-from utils.convert import normalize_for_parser, UnsupportedFormatError  # noqa: E402
+from utils.convert import normalize_for_parser, UnsupportedFormatError, _OFFICE_TARGET  # noqa: E402
 from utils.docling import (  # noqa: E402
     upload_file_for_chunking_sync,
     PARSER_NATIVE_EXTENSIONS,
@@ -27,6 +27,8 @@ from utils.docling import (  # noqa: E402
     ASR_AUDIO_EXTENSIONS,
     ASR_VIDEO_EXTENSIONS,
 )
+from utils.tabular import is_tabular, chunk_tabular  # noqa: E402
+from utils.settings import TABULAR_ENABLED  # noqa: E402
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 OUT_MD = os.path.join(os.path.dirname(__file__), "SUPPORTED_FORMATS.md")
@@ -40,6 +42,72 @@ def classify(ext: str) -> str:
     return "non supportato"
 
 
+def whitelist_lines() -> list:
+    """Sezione AUTOREVOLE: ogni estensione accettata, derivata dai set di
+    `utils/docling.py` (+ target di conversione da `utils/convert._OFFICE_TARGET`).
+
+    Si genera dal codice, non dalle fixture → non può andare fuori sync con ciò
+    che i validate accettano davvero. La tabella esiti più sotto è solo il
+    sottoinsieme con una fixture passata per Docling reale."""
+    # convertibili con mezzo di conversione "speciale" (non LibreOffice)
+    special = {
+        ".eml": ("html", "stdlib `email`"),
+        ".msg": ("html", "`extract-msg`"),
+        ".txt": ("md", "copia diretta"),
+    }
+    how = {"docx": "LibreOffice", "pptx": "LibreOffice",
+           "xlsx": "LibreOffice", "pdf": "LibreOffice (Draw)"}
+
+    native = sorted(PARSER_NATIVE_EXTENSIONS)
+    audio = sorted(ASR_AUDIO_EXTENSIONS)
+    video = sorted(ASR_VIDEO_EXTENSIONS)
+    conv = sorted(PARSER_CONVERTIBLE_EXTENSIONS - ASR_AUDIO_EXTENSIONS - ASR_VIDEO_EXTENSIONS)
+    total = len(native) + len(conv) + len(audio) + len(video)
+
+    # raggruppa i convertibili per (target, come) così doc/rtf/odt stanno in una riga
+    groups: dict = {}
+    for e in conv:
+        if e in special:
+            key = special[e]
+        else:
+            tgt = _OFFICE_TARGET.get(e, "?")
+            key = (tgt, how.get(tgt, "—"))
+        groups.setdefault(key, []).append(e)
+
+    order = ["html", "docx", "pptx", "xlsx", "pdf", "md"]
+    def _k(item):
+        (tgt, _note), _exts = item
+        return (order.index(tgt) if tgt in order else 99, tgt)
+
+    L = [
+        "## Whitelist completa (autorevole — da `utils/docling.py`)",
+        "",
+        f"**{total} estensioni** accettate dai validate (upload manuale + fail-fast SharePoint).",
+        "",
+        "**Nativi** — Docling li parsa direttamente:",
+        "",
+        "> " + "  ".join(f"`{e}`" for e in native),
+        "",
+        "**Convertiti pre-parser** — passano da `utils/convert.py` prima di Docling:",
+        "",
+        "| Estensione | → target | Come |",
+        "|---|---|---|",
+    ]
+    for (tgt, note), exts in sorted(groups.items(), key=_k):
+        L.append(f"| {' '.join(f'`{e}`' for e in sorted(exts))} | `{tgt}` | {note} |")
+    L += [
+        "",
+        "**Audio** — trascritti in casa (faster-whisper) → `.vtt`, se `ASR_ENABLED`:",
+        "",
+        "> " + "  ".join(f"`{e}`" for e in audio),
+        "",
+        "**Video** — audio estratto + trascritto → `.vtt`, se `ASR_ENABLED`:",
+        "",
+        "> " + "  ".join(f"`{e}`" for e in video),
+    ]
+    return L
+
+
 def run_one(path: str) -> dict:
     ext = os.path.splitext(path)[1].lower()
     row = {"ext": ext, "kind": classify(ext), "via": "—", "chunks": 0, "status": "?", "note": ""}
@@ -48,7 +116,12 @@ def run_one(path: str) -> dict:
         parse_path, tmp = normalize_for_parser(path)
         if tmp:
             row["via"] = os.path.splitext(parse_path)[1].lower()
-        res = upload_file_for_chunking_sync(parse_path)
+        # csv/xlsx → chunker tabulare dedicato (come fa il worker), il resto → Docling
+        if TABULAR_ENABLED and is_tabular(parse_path):
+            res = chunk_tabular(parse_path)
+            row["kind"] = "tabulare"
+        else:
+            res = upload_file_for_chunking_sync(parse_path)
         chunks = res.get("chunks") or []
         row["chunks"] = len(chunks)
         row["status"] = "OK"
@@ -96,9 +169,21 @@ def main():
     lines = [
         "# Formati supportati — Sophia Vector",
         "",
-        "Generato da `tests/verify_formats.py` (pipeline reale: normalizzazione "
-        "pre-parser + chunking Docling). I formati **nativi** li parsa Docling "
-        "direttamente; i **convertiti** passano da `utils/convert.py` prima del parser.",
+        "Generato da `tests/verify_formats.py`. La **whitelist completa** qui sotto è la "
+        "lista autorevole (derivata dai set in `utils/docling.py`): è ciò che i validate "
+        "accettano in upload e nel fail-fast SharePoint. La **tabella esiti** più in basso "
+        "copre solo i formati con una fixture realmente passata per la pipeline "
+        "(normalizzazione pre-parser + chunking Docling reale).",
+        "",
+    ]
+    lines += whitelist_lines()
+    lines += [
+        "",
+        "## Esiti pipeline sulle fixture",
+        "",
+        "I formati **nativi** li parsa Docling direttamente; i **convertiti** passano da "
+        "`utils/convert.py` prima del parser. `.msg` non è auto-generabile (serve MAPI) → "
+        "testato solo se aggiungi a mano `tests/fixtures/sample.msg`.",
         "",
         "| Estensione | Tipo | Conversione | Chunk | Esito | Note |",
         "|---|---|---|---:|:---:|---|",
@@ -119,6 +204,11 @@ def main():
         "mano in `tests/fixtures/sample.msg` (non auto-generabile senza MAPI).",
         "- I formati Office binari/ODF/RTF richiedono **LibreOffice** nell'immagine; "
         "`.eml`/`.txt` no (stdlib).",
+        "- **Tabellari** (`.csv`/`.xlsx`, e `.xls`/`.ods` dopo conversione) non passano "
+        "da Docling ma dal **chunker tabulare** (`utils/tabular.py`): una *table card* "
+        "(schema + statistiche per colonna + righe campione) e le righe verbalizzate "
+        "fino a un cap. Evita l'esplosione di Docling sulle tabelle enormi; il numero "
+        "di chunk dipende dalle righe. Spegnibile con `SOPHIA_VECTOR_TABULAR_ENABLED=false`.",
         "- Alias coperti dallo stesso path (senza fixture dedicata): `.htm`/`.xhtml` "
         "(= html), `.jpeg` (= jpg), `.tif` (= tiff), `.asciidoc` (= adoc).",
         "- **Audio/Video**: trascritti **in casa** con faster-whisper (lazy, CPU) → "

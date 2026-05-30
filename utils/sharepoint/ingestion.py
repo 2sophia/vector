@@ -16,6 +16,7 @@ from utils.filesystem import store_file_on_disk, delete_file_from_disk
 from utils.logger import get_logger
 from utils.qdrant import delete_qdrant_points
 from utils.settings import MAX_FILE_SIZE
+from utils.exclusions import is_excluded
 
 logger = get_logger(__name__)
 
@@ -608,6 +609,12 @@ class SharePointProcessor:
         file_size = int(file_info.get("size") or 0)
         if file_size > MAX_FILE_SIZE:
             return False, f"EXCLUDED - File too large ({file_size} bytes > {MAX_FILE_SIZE})"
+
+        # Step 0.5: file marcato EXCLUDED manualmente → la sync lo VEDE ma lo salta
+        # (niente download, niente job). Vale anche col cron. Identità durevole =
+        # sharepoint_file_id (l'id Graph): il file_id viene rigenerato a ogni sync.
+        if is_excluded(self.config.vector_store_id, sharepoint_file_id=file_info.get("id")):
+            return False, "EXCLUDED - escluso manualmente"
 
         # Step 1: INCLUDE rules (whitelist) - se presenti DEVONO matchare
         if self.config.include_rules:

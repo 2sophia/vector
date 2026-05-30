@@ -127,6 +127,19 @@ def _count_files(vector_store_id: str, slug: str) -> int:
     )
 
 
+def _count_unassigned(vector_store_id: str, slugs: list) -> int:
+    """File del vector store che NON appartengono a nessuna directory: slug assente,
+    vuoto o non corrispondente a una directory esistente. Sono i file caricati via
+    API/dev senza `sophia_directory_slug` — validi ma invisibili nelle card directory.
+    `$nin` matcha anche i documenti che non hanno proprio il campo (slug mancante)."""
+    return len(
+        ingestion_jobs.distinct(
+            "file_id",
+            {"vector_store_id": vector_store_id, f"attributes.{SLUG_FIELD}": {"$nin": slugs}},
+        )
+    )
+
+
 def _to_response(doc: dict) -> DirectoryResponse:
     return DirectoryResponse(
         id=doc["_id"],
@@ -192,7 +205,17 @@ async def list_directories(vector_store_id: str | None = None):
     docs = await asyncio.to_thread(
         lambda: list(directories_coll.find(query).sort("created_at", -1))
     )
-    return {"object": "list", "data": [_to_response(d) for d in docs]}
+    out = {"object": "list", "data": [_to_response(d) for d in docs]}
+    # Bucket "senza directory": i file dello store non assegnati a nessuno slug.
+    # Solo quando si filtra per vector store (è un concetto per-store). Permette alla
+    # UI una card fissa per i file caricati via API/dev senza slug, altrimenti invisibili.
+    if vector_store_id:
+        slugs = [d.get("slug", "") for d in docs]
+        out["unassigned"] = {
+            "vector_store_id": vector_store_id,
+            "file_count": await asyncio.to_thread(_count_unassigned, vector_store_id, slugs),
+        }
+    return out
 
 
 @router.get("/{directory_id}", response_model=DirectoryResponse)
