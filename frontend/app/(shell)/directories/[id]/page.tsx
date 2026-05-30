@@ -243,6 +243,22 @@ function FilesTable({
   const [visible, setVisible] = useState(FILES_PAGE_SIZE);
   const shown = rows.slice(0, visible);
   const remaining = rows.length - visible;
+  // Selezione a range con Shift (il browser NON lo fa da solo sulle checkbox):
+  // teniamo l'indice dell'ultima riga cliccata come "ancora". `shown` e `rows`
+  // hanno lo stesso ordine sui primi N → l'indice è valido su entrambi.
+  const lastIndexRef = useRef<number | null>(null);
+  const onRowClick = (i: number, shift: boolean) => {
+    const f = shown[i];
+    const target = !selected.has(f.file_id); // lo stato verso cui va il click
+    if (shift && lastIndexRef.current !== null) {
+      const a = Math.min(lastIndexRef.current, i);
+      const b = Math.max(lastIndexRef.current, i);
+      onToggleAll(rows.slice(a, b + 1), target); // stesso stato a tutto il range
+    } else {
+      onToggle(f.file_id);
+    }
+    lastIndexRef.current = i;
+  };
 
   return (
     <div className="overflow-x-auto">
@@ -259,7 +275,7 @@ function FilesTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-          {shown.map((f) => (
+          {shown.map((f, i) => (
             <tr
               key={f.id}
               className={cn(
@@ -272,7 +288,12 @@ function FilesTable({
                   type="checkbox"
                   className="mt-0.5 size-4 cursor-pointer accent-indigo-600"
                   checked={selected.has(f.file_id)}
-                  onChange={() => onToggle(f.file_id)}
+                  onChange={() => {}}
+                  onMouseDown={(e) => {
+                    // evita la selezione-testo quando tieni premuto Shift
+                    if (e.shiftKey) e.preventDefault();
+                  }}
+                  onClick={(e) => onRowClick(i, e.shiftKey)}
                   aria-label={`Seleziona ${f.filename}`}
                 />
               </td>
