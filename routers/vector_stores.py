@@ -408,6 +408,26 @@ def _execute_optimize_job(job_id: str, vector_store_id: str, p: dict) -> None:
         )
 
 
+def _active_optimize_job(vector_store_id: str):
+    """Job di optimize `running` (non orfano) per questo store, o None. Un running più
+    vecchio di STALE_OPTIMIZE_SECONDS = worker morto → lo marca failed e ritorna None
+    (così non blocca per sempre i nuovi lanci)."""
+    job = optimize_jobs.find_one(
+        {"vector_store_id": vector_store_id, "status": "running"},
+        sort=[("created_at", -1)],
+    )
+    if not job:
+        return None
+    if get_timestamp() - job.get("updated_at", 0) > STALE_OPTIMIZE_SECONDS:
+        optimize_jobs.update_one(
+            {"_id": job["_id"]},
+            {"$set": {"status": "failed", "error": "job orfano (timeout)",
+                      "finished_at": get_timestamp(), "updated_at": get_timestamp()}},
+        )
+        return None
+    return job
+
+
 @router.post("/{vector_store_id}/optimize")
 def optimize_vector_store(
     vector_store_id: str,
@@ -441,6 +461,20 @@ def optimize_vector_store(
     if vector_store_id not in collections:
         raise HTTPException(status_code=404, detail="Vector store not found")
 
+    # Anti-flood: se c'è GIÀ un job in corso per questo store, NON ne avvio un altro
+    # (l'optimize è pesante — near-duplicate O(N) round-trip Qdrant; due in parallelo
+    # intasano il server). Ritorno quello esistente → la UI ci si riaggancia col polling,
+    # anche dopo un F5. Idempotente per store.
+    existing = _active_optimize_job(vector_store_id)
+    if existing:
+        return {
+            "object": "vector_store.optimize_job",
+            "job_id": existing["_id"],
+            "vector_store_id": vector_store_id,
+            "status": "running",
+            "already_running": True,
+        }
+
     params = {
         "min_score": min_score, "min_entity_len": min_entity_len,
         "drop_numeric": drop_numeric, "dense_threshold": dense_threshold,
@@ -462,6 +496,23 @@ def optimize_vector_store(
         "job_id": job_id,
         "vector_store_id": vector_store_id,
         "status": "running",
+    }
+
+
+@router.get("/{vector_store_id}/optimize")
+def get_active_optimize_job(vector_store_id: str):
+    """Job di ottimizzazione attualmente in corso per lo store (per **ri-agganciarsi**
+    dopo un refresh della pagina, così non si rilancia un doppione). `idle` se nessuno."""
+    job = _active_optimize_job(vector_store_id)
+    if not job:
+        return {"object": "vector_store.optimize_job", "status": "idle"}
+    return {
+        "object": "vector_store.optimize_job",
+        "job_id": job["_id"],
+        "vector_store_id": vector_store_id,
+        "status": "running",
+        "params": job.get("params"),
+        "created_at": job.get("created_at"),
     }
 
 

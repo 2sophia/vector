@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Wand2, Eye, Play, Loader2, Trash2, FileText, Layers, RotateCcw } from "lucide-react";
@@ -80,10 +80,12 @@ type OptimizeResult = {
 // L'optimize gira come job asincrono: POST ritorna {job_id, running}, poi si fa
 // polling sul GET finché completed/failed (il calcolo può durare minuti → no timeout).
 type OptimizeJobResponse = {
-  job_id: string;
-  status: "running" | "completed" | "failed";
+  job_id?: string;
+  status: "idle" | "running" | "completed" | "failed";
   result?: OptimizeResult | null;
   error?: string | null;
+  params?: { dry_run?: boolean } | null;
+  already_running?: boolean;
 };
 
 export default function OptimizePage() {
@@ -103,6 +105,25 @@ export default function OptimizePage() {
   const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Polling di un job fino a completed/failed. Riusato sia dal lancio (run) sia dal
+  // recupero dopo un F5. Cap a 20 min: oltre, si molla il polling (il job continua
+  // lato server e si ritrova al refresh successivo).
+  const pollUntilDone = useCallback(
+    async (jobId: string): Promise<OptimizeJobResponse> => {
+      const startedAt = performance.now();
+      const TIMEOUT_MS = 20 * 60 * 1000;
+      let job = await api.get<OptimizeJobResponse>(`/vector_stores/${vsid}/optimize/${jobId}`);
+      while (job.status === "running") {
+        if (performance.now() - startedAt > TIMEOUT_MS)
+          throw new Error("timeout polling: il job è ancora in corso, riprova tra poco");
+        await new Promise((res) => setTimeout(res, 2000));
+        job = await api.get<OptimizeJobResponse>(`/vector_stores/${vsid}/optimize/${jobId}`);
+      }
+      return job;
+    },
+    [vsid],
+  );
+
   const run = useCallback(
     async (dryRun: boolean, reset = false) => {
       setBusy(reset ? "reset" : dryRun ? "preview" : "apply");
@@ -119,21 +140,16 @@ export default function OptimizePage() {
         `${applyRed ? " --mark-redundant" : ""}${reset ? " --reset-redundant" : ""}` +
         `${dryRun ? " --dry-run" : ""}`;
       try {
-        // 1) avvia il job e fai polling finché è pronto (può durare minuti)
+        // 1) avvia il job. Idempotente: se ce n'è già uno in corso per lo store, il
+        // backend ritorna quello (anti-flood) e noi ci riagganciamo col polling.
         const started = await api.post<OptimizeJobResponse>(
           `/vector_stores/${vsid}/optimize?${qs}`,
         );
-        let job = started;
-        const startedAt = performance.now();
-        const TIMEOUT_MS = 20 * 60 * 1000; // oltre: si molla il polling (il job continua lato server)
-        while (job.status === "running") {
-          if (performance.now() - startedAt > TIMEOUT_MS)
-            throw new Error("timeout polling: il job è ancora in corso, riprova tra poco");
-          await new Promise((res) => setTimeout(res, 2000));
-          job = await api.get<OptimizeJobResponse>(
-            `/vector_stores/${vsid}/optimize/${started.job_id}`,
-          );
-        }
+        if (started.already_running)
+          setLog((prev) => [...prev, "↻ un'ottimizzazione è già in corso: mi riaggancio a quella."]);
+        if (!started.job_id) throw new Error("nessun job avviato");
+        // 2) polling finché è pronto (può durare minuti)
+        const job = await pollUntilDone(started.job_id);
         if (job.status === "failed" || !job.result)
           throw new Error(job.error || "ottimizzazione fallita");
         const r = job.result;
@@ -191,8 +207,37 @@ export default function OptimizePage() {
         setBusy(false);
       }
     },
-    [vsid, minScore, minLen, dropNumeric, denseThreshold, markRedundant, includeOutliers, includeConflicts],
+    [vsid, minScore, minLen, dropNumeric, denseThreshold, markRedundant, includeOutliers, includeConflicts, pollUntilDone],
   );
+
+  // Recupero dopo un F5: se per questo store c'è già un job in corso, ci si riaggancia
+  // (mostra "in corso" + polling) invece di lasciar rilanciare un doppione. Il backend
+  // è comunque idempotente, questo è il lato UI che ritrova lo stato perso al refresh.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const active = await api.get<OptimizeJobResponse>(`/vector_stores/${vsid}/optimize`);
+        if (cancelled || active.status !== "running" || !active.job_id) return;
+        setBusy(active.params?.dry_run ? "preview" : "apply");
+        setLog((prev) => [...prev, `↻ ripreso un'ottimizzazione già in corso (${active.job_id})…`]);
+        const job = await pollUntilDone(active.job_id);
+        if (cancelled) return;
+        if (job.status === "failed" || !job.result) setError(job.error || "ottimizzazione fallita");
+        else {
+          setResult(job.result);
+          setLog((prev) => [...prev, "✓ ottimizzazione completata.", ""]);
+        }
+      } catch {
+        /* nessun job attivo o backend non ancora aggiornato: si ignora */
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [vsid, pollUntilDone]);
 
   const g = result?.graph;
   const cur = result?.curation;
