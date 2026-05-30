@@ -8,6 +8,7 @@ import {
   Ban,
   Check,
   CheckCircle2,
+  CheckSquare,
   CloudUpload,
   ExternalLink,
   FileText,
@@ -191,16 +192,49 @@ function StatusBar({ rows }: { rows: StoreFile[] }) {
 
 const FILES_PAGE_SIZE = 100;
 
+/** Checkbox "seleziona tutto" di un gruppo, con stato indeterminate quando solo
+ *  alcune righe sono selezionate (gestito via ref, non esiste come prop su <input>). */
+function SelectAllBox({
+  rows,
+  selected,
+  onToggleAll,
+}: {
+  rows: StoreFile[];
+  selected: Set<string>;
+  onToggleAll: (rows: StoreFile[], checked: boolean) => void;
+}) {
+  const all = rows.length > 0 && rows.every((f) => selected.has(f.file_id));
+  const some = rows.some((f) => selected.has(f.file_id));
+  return (
+    <input
+      type="checkbox"
+      className="size-4 cursor-pointer accent-indigo-600"
+      checked={all}
+      ref={(el) => {
+        if (el) el.indeterminate = !all && some;
+      }}
+      onChange={(e) => onToggleAll(rows, e.target.checked)}
+      aria-label="Seleziona tutti"
+    />
+  );
+}
+
 /** Tabella file riusabile: stessa resa per i file manuali e per i sincronizzati.
  *  Pagina lato client (FILES_PAGE_SIZE per volta) per non montare migliaia di righe. */
 function FilesTable({
   rows,
+  selected,
+  onToggle,
+  onToggleAll,
   onDelete,
   onRetry,
   onExclude,
   onUnexclude,
 }: {
   rows: StoreFile[];
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onToggleAll: (rows: StoreFile[], checked: boolean) => void;
   onDelete: (f: StoreFile) => void;
   onRetry: (f: StoreFile) => void;
   onExclude: (f: StoreFile) => void;
@@ -215,6 +249,9 @@ function FilesTable({
       <table className="w-full text-sm">
         <thead className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <tr>
+            <th className="w-8 px-2 py-2">
+              <SelectAllBox rows={rows} selected={selected} onToggleAll={onToggleAll} />
+            </th>
             <th className="px-2 py-2 font-medium">File</th>
             <th className="px-2 py-2 text-right font-medium">Chunks</th>
             <th className="px-2 py-2 font-medium">Stato</th>
@@ -223,7 +260,22 @@ function FilesTable({
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {shown.map((f) => (
-            <tr key={f.id} className="group transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/40">
+            <tr
+              key={f.id}
+              className={cn(
+                "group transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-900/40",
+                selected.has(f.file_id) && "bg-indigo-50/60 dark:bg-indigo-950/20",
+              )}
+            >
+              <td className="px-2 py-2.5 align-top">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 cursor-pointer accent-indigo-600"
+                  checked={selected.has(f.file_id)}
+                  onChange={() => onToggle(f.file_id)}
+                  aria-label={`Seleziona ${f.filename}`}
+                />
+              </td>
               <td className="max-w-md px-2 py-2.5">
                 <div className="flex items-start gap-2">
                   <FileText className="mt-0.5 size-4 shrink-0 text-zinc-400" />
@@ -602,6 +654,92 @@ export default function DirectoryDetailPage() {
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  // ---- Selezione massiva (azioni su più file insieme) ----
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState<{ action: string; done: number; total: number } | null>(null);
+
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const toggleAll = (rows: StoreFile[], checked: boolean) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      rows.forEach((f) => (checked ? n.add(f.file_id) : n.delete(f.file_id)));
+      return n;
+    });
+  const clearSel = () => setSelected(new Set());
+
+  // Dopo un refresh i file possono sparire (delete/sync): togli dalla selezione i fantasmi.
+  useEffect(() => {
+    setSelected((s) => {
+      if (s.size === 0) return s;
+      const ids = new Set(files.map((f) => f.file_id));
+      const n = new Set<string>();
+      s.forEach((id) => ids.has(id) && n.add(id));
+      return n.size === s.size ? s : n;
+    });
+  }, [files]);
+
+  // Esegue un'azione su molti file con concorrenza limitata + progress, poi refresh.
+  async function runBulk(
+    action: string,
+    targets: StoreFile[],
+    fn: (f: StoreFile) => Promise<unknown>,
+  ) {
+    if (!dir || targets.length === 0) return;
+    setError(null);
+    setNotice(null);
+    setBulkBusy({ action, done: 0, total: targets.length });
+    let done = 0;
+    let failed = 0;
+    const CONC = 4;
+    for (let i = 0; i < targets.length; i += CONC) {
+      const batch = targets.slice(i, i + CONC);
+      const res = await Promise.allSettled(batch.map(fn));
+      res.forEach((r) => {
+        done++;
+        if (r.status === "rejected") failed++;
+      });
+      setBulkBusy({ action, done, total: targets.length });
+    }
+    setBulkBusy(null);
+    clearSel();
+    await refresh();
+    setNotice(`${action}: ${done - failed}/${targets.length} ok${failed ? `, ${failed} non riusciti` : ""}.`);
+  }
+
+  function bulkRetry() {
+    const t = files.filter((f) => selected.has(f.file_id) && f.status === "FAILED");
+    return runBulk("Riprova", t, (f) =>
+      api.post(`/vector_stores/${dir!.vector_store_id}/files/${f.file_id}/retry`));
+  }
+  function bulkExclude() {
+    const t = files.filter((f) => selected.has(f.file_id) && f.status !== "EXCLUDED");
+    if (
+      !confirm(
+        `Escludere ${t.length} file?\n\nVerranno saltati ovunque (vector worker + sync, anche col cron) e i dati già indicizzati rimossi. Reversibile con "Re-includi".`,
+      )
+    )
+      return;
+    return runBulk("Escludi", t, (f) =>
+      api.post(`/vector_stores/${dir!.vector_store_id}/files/${f.file_id}/exclude`));
+  }
+  function bulkUnexclude() {
+    const t = files.filter((f) => selected.has(f.file_id) && f.status === "EXCLUDED");
+    return runBulk("Re-includi", t, (f) =>
+      api.delete(`/vector_stores/${dir!.vector_store_id}/files/${f.file_id}/exclude`));
+  }
+  function bulkDelete() {
+    const t = files.filter((f) => selected.has(f.file_id));
+    if (!confirm(`Rimuovere ${t.length} file dalla directory?`)) return;
+    return runBulk("Elimina", t, (f) =>
+      api.delete(`/vector_stores/${dir!.vector_store_id}/files/${f.file_id}`));
   }
 
   async function handleRetryAll() {
@@ -1176,6 +1314,54 @@ export default function DirectoryDetailPage() {
             )}
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
+            {/* Action bar selezione massiva: appare quando hai selezionato dei file */}
+            {selected.size > 0 && (
+              <div className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50/90 px-3 py-2 shadow-sm backdrop-blur dark:border-indigo-900/50 dark:bg-indigo-950/40">
+                <div className="flex items-center gap-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
+                  <CheckSquare className="size-4" />
+                  {selected.size} selezionat{selected.size === 1 ? "o" : "i"}
+                  {bulkBusy && (
+                    <span className="inline-flex items-center gap-1 text-xs font-normal text-indigo-600 dark:text-indigo-300">
+                      <Loader2 className="size-3 animate-spin" />
+                      {bulkBusy.action} {bulkBusy.done}/{bulkBusy.total}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {files.some((f) => selected.has(f.file_id) && f.status === "FAILED") && (
+                    <Button size="sm" variant="outline" disabled={!!bulkBusy} onClick={bulkRetry}>
+                      <RotateCcw className="size-4" />
+                      Riprova ({files.filter((f) => selected.has(f.file_id) && f.status === "FAILED").length})
+                    </Button>
+                  )}
+                  {files.some((f) => selected.has(f.file_id) && f.status === "EXCLUDED") && (
+                    <Button size="sm" variant="outline" disabled={!!bulkBusy} onClick={bulkUnexclude}>
+                      <Undo2 className="size-4" />
+                      Re-includi ({files.filter((f) => selected.has(f.file_id) && f.status === "EXCLUDED").length})
+                    </Button>
+                  )}
+                  {files.some((f) => selected.has(f.file_id) && f.status !== "EXCLUDED") && (
+                    <Button size="sm" variant="outline" disabled={!!bulkBusy} onClick={bulkExclude}>
+                      <Ban className="size-4" />
+                      Escludi ({files.filter((f) => selected.has(f.file_id) && f.status !== "EXCLUDED").length})
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!!bulkBusy}
+                    onClick={bulkDelete}
+                    className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                  >
+                    <Trash2 className="size-4" />
+                    Elimina ({selected.size})
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={!!bulkBusy} onClick={clearSel} aria-label="Deseleziona tutto">
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
             {files.length === 0 ? (
               <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-zinc-300 text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
                 Carica il primo file.
@@ -1203,7 +1389,7 @@ export default function DirectoryDetailPage() {
                       <CloudUpload className="size-4" />
                       Caricati a mano · {manualFiles.length}
                     </div>
-                    <FilesTable rows={manualFiles} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
+                    <FilesTable rows={manualFiles} selected={selected} onToggle={toggle} onToggleAll={toggleAll} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
                   </div>
                 )}
 
@@ -1217,7 +1403,7 @@ export default function DirectoryDetailPage() {
                       Gestiti dalle sync qui sopra. Eliminandoli a mano tornano al prossimo sync se ancora
                       presenti nella source: per toglierli davvero, elimina la sync.
                     </p>
-                    <FilesTable rows={syncedFiles} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
+                    <FilesTable rows={syncedFiles} selected={selected} onToggle={toggle} onToggleAll={toggleAll} onDelete={handleDelete} onRetry={handleRetry} onExclude={handleExclude} onUnexclude={handleUnexclude} />
                   </div>
                 )}
               </>
